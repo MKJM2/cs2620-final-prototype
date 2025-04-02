@@ -2997,10 +2997,12 @@ function convertAceDeltaToOp(delta) {
     const text2 = delta.lines.join(`
 `);
     op.insert(text2);
+    op.retain(this.virtualDoc.length - index);
   } else if (delta.action === "remove") {
     const removedText = delta.lines.join(`
 `);
     op.delete(removedText.length);
+    op.retain(this.virtualDoc.length - (index + removedText.length));
   }
   return op;
 }

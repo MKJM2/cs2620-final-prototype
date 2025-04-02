@@ -52,13 +52,13 @@ function convertAceDeltaToOp(this: any, delta: any): TextOperation {
     const text = delta.lines.join("\n");
     op.insert(text);
     // Final retain: remaining length from the base.
-    // op.retain(this.virtualDoc.length - index);
+     op.retain(this.virtualDoc.length - index);
   } else if (delta.action === "remove") {
     // For removal, the delta object has an 'end' property.
     // Compute the deletion length based on the removed text.
     const removedText = delta.lines.join("\n");
     op.delete(removedText.length);
-    // op.retain(this.virtualDoc.length - (index + removedText.length));
+    op.retain(this.virtualDoc.length - (index + removedText.length));
   }
 
   return op;
@@ -305,7 +305,7 @@ function editorApp() {
           return;
         }
 
-        let serverOp = TextOperation.fromJSON(msg.op);
+        let serverOp: TextOperation = TextOperation.fromJSON(msg.op);
 
         // We need to transform the incoming serverOp against any local changes
         // that might exist (either outstanding or just dirty).
