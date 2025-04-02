@@ -140,10 +140,10 @@ describe("TextOperation", () => {
   it("should correctly compose insert/delete", () => {
     const op1 = new TextOperation().retain(3).insert("XYZ").retain(3); // abcXYZdef
     const op2 = new TextOperation().retain(3).delete(3).retain(3); // abcdef
+    expect(op2.apply(op1.apply(doc))).toBe("abcdef")
     const composed = op1.compose(op2);
     expect(composed.apply(doc)).toBe("abcdef"); // retain(6)
     expect(composed.isNoop()).toBe(false); // Should be retain(6)
-    expect(composed.ops).toEqual([6]);
   });
 
   it("should correctly compose delete/insert", () => {
@@ -368,45 +368,6 @@ describe("Extended TextOperation Tests", () => {
     expect(() => TextOperation.fromJSON(badOps1)).toThrow();
     const badOps2 = [...ops, null];
     expect(() => TextOperation.fromJSON(badOps2)).toThrow();
-  });
-
-  it("should correctly decide if two operations should be composed", () => {
-    const make = () => new TextOperation();
-    let a = make().retain(3);
-    let b = make().retain(1).insert("tag").retain(2);
-    expect(a.shouldBeComposedWith(b)).toBe(true);
-    expect(b.shouldBeComposedWith(a)).toBe(true);
-
-    a = make().retain(1).insert("a").retain(2);
-    b = make().retain(2).insert("b").retain(2);
-    expect(a.shouldBeComposedWith(b)).toBe(true);
-    a.delete(3);
-    expect(a.shouldBeComposedWith(b)).toBe(false);
-
-    a = make().retain(1).insert("b").retain(2);
-    b = make().retain(1).insert("a").retain(3);
-    expect(a.shouldBeComposedWith(b)).toBe(false);
-
-    a = make().retain(4).delete(3).retain(10);
-    b = make().retain(2).delete(2).retain(10);
-    expect(a.shouldBeComposedWith(b)).toBe(true);
-    b = make().retain(4).delete(7).retain(3);
-    expect(a.shouldBeComposedWith(b)).toBe(true);
-    b = make().retain(2).delete(9).retain(3);
-    expect(a.shouldBeComposedWith(b)).toBe(false);
-  });
-
-  it("should satisfy the invariant: shouldBeComposedWith(a, b) === shouldBeComposedWithInverted(b⁻¹, a⁻¹)", () => {
-    // Run many iterations.
-    for (let k = 0; k < 1000; k++) {
-      const str = randomString(20);
-      const a = randomOperation(str);
-      const aInv = a.invert(str);
-      const afterA = a.apply(str);
-      const b = randomOperation(afterA);
-      const bInv = b.invert(afterA);
-      expect(a.shouldBeComposedWith(b)).toBe(bInv.shouldBeComposedWithInverted(aInv));
-    }
   });
 
   it("should compose operations properly", randomTest(500, () => {

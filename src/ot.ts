@@ -168,6 +168,24 @@ export class TextOperation {
   }
 
   /**
+   * Checks if two TextOperations are the same
+   * @returns True if the operations are equivalent
+   */
+  equals(other: TextOperation): boolean {
+    if ((this.baseLength !== other.baseLength) ||
+        (this.targetLength !== other.targetLength) ||
+        (this.ops.length !== other.ops.length)) {
+      return false;
+    }
+    for (let i = 0; i < this.ops.length; ++i) {
+      if (this.ops[i] !== other.ops[i]) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
    * Returns the inner Operation Component from a complex
    * TextOperation. Skips over retain() micro-ops.
    * @param op - The TextOperation to pull a simple micro-op out of.
@@ -301,8 +319,8 @@ export class TextOperation {
     let op2 = ops2.shift();
 
     while (op1 !== undefined || op2 !== undefined) {
-      if (isInsert(op1)) {
-        composed.insert(op1);
+      if (isDelete(op1)) {
+        composed.delete(-op1);
         op1 = ops1.shift();
         continue;
       }
@@ -336,29 +354,28 @@ export class TextOperation {
           op1 = ops1.shift();
           op2 = ops2.shift();
         }
-      } else if (isDelete(op1) && isDelete(op2)) {
-        const minLen = Math.min(-op1, -op2);
-        composed.delete(minLen);
-        if (-op1 > -op2) {
-          op1 += minLen; // op1 becomes less negative
+      } else if (isInsert(op1) && isDelete(op2)) {
+        if (op1.length > -op2) {
+          op1 = op1.slice(-op2);
           op2 = ops2.shift();
-        } else if (-op1 < -op2) {
-          op2 += minLen; // op2 becomes less negative
+        } else if (op1.length < -op2) {
+          op2 += op1.length;
           op1 = ops1.shift();
-        } else {
+        } else { // insertion and delete cancel out
           op1 = ops1.shift();
           op2 = ops2.shift();
         }
-      } else if (isDelete(op1) && isRetain(op2)) {
-        const minLen = Math.min(-op1, op2);
-        composed.delete(minLen);
-        if (-op1 > op2) {
-          op1 += op2; // op1 becomes less negative
+      } else if (isInsert(op1) && isRetain(op2)) {
+        if (op1.length > op2) {
+          composed.insert(op1.slice(0, op2));
+          op1 = op1.slice(op2);
           op2 = ops2.shift();
-        } else if (-op1 < op2) {
-          op2 -= -op1; // op2 becomes smaller positive
+        } else if (op1.length < op2) { // cut the retain short
+          composed.insert(op1)
+          op2 -= op1.length;
           op1 = ops1.shift();
         } else {
+          composed.insert(op1);
           op1 = ops1.shift();
           op2 = ops2.shift();
         }
