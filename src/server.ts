@@ -1,6 +1,11 @@
 // src/server.ts
-import { Server } from "socket.io";
-import { TextOperation, OperationComponent } from "./ot";
+import fastify from "fastify";
+import fastifyCors from "@fastify/cors";
+import fastifyIO from "fastify-socket.io";
+import fastifyStatic from "@fastify/static";
+import path from "path";
+import { fileURLToPath } from "url";
+import { TextOperation } from "./ot";
 import type {
   ClientPushMsg,
   ClientPullMsg,
@@ -8,159 +13,195 @@ import type {
   ServerUpdateMsg,
   ServerHistoryMsg,
   ServerInitialStateMsg,
-} from "./types"; // Adjust path if needed
+} from "./types";
+
+// Get __dirname for ESM
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 console.log("Starting OT Server...");
 
-// --- Server State ---
-let documentState = `# Collaborative Markdown Editor\n\nStart editing!`;
+// --- OT Server State ---
+let documentState =
+  "# Collaborative Markdown Editor\n\nStart editing!";
 let currentRevision = 0;
-// History stores the operations that *have been applied* to reach the current state.
-// history[i] transforms revision i to revision i+1.
+// History of applied operations (each op takes state from rev n to rev n+1)
 const operationHistory: TextOperation[] = [];
 
-// --- Socket.IO Server Setup ---
-const io = new Server({
+// --- Fastify Server Setup ---
+const app = fastify();
+
+// 1. Register CORS so that /socket.io polling requests have proper headers.
+app.register(fastifyCors, { origin: "*" });
+
+// 4. Register Socket.IO.
+// Note: Its default endpoint is '/socket.io'
+app.register(fastifyIO, {
   cors: {
-    origin: "*", // Allow all origins for simplicity in prototype
+    origin: "*",
     methods: ["GET", "POST"],
   },
 });
 
-io.on("connection", (socket) => {
-  console.log(`Client connected: ${socket.id}`);
+// 2. Register static asset serving for your public assets under '/public'.
+// This prevents a catch-all route serving every path (like /socket.io).
+const publicDir = path.resolve(__dirname, "../public");
+app.register(fastifyStatic, {
+  root: publicDir,
+  prefix: "/", // e.g. /public/client.js, /public/style.css, etc.
+  wildcard: false
+});
 
-  // 1. Send initial state to the newly connected client
-  const initialStateMsg: ServerInitialStateMsg = {
-    doc: documentState,
-    revision: currentRevision,
-  };
-  socket.emit("initial_state", initialStateMsg);
-  console.log(`Sent initial state (rev ${currentRevision}) to ${socket.id}`);
+// Serve index.html at the root path.
+//app.get("/", (req, reply) => {
+  //reply.sendFile("index.html");
+//});
 
-  // 2. Handle client pushing changes ('push')
-  socket.on("push", (msg: ClientPushMsg) => {
-    console.log(
-      `Received push from ${socket.id} based on their rev ${msg.revision}`,
-    );
 
-    try {
-      let clientOp = TextOperation.fromJSON(msg.op);
+app.ready().then(() => {
+  app.io.on("connection", (socket) => {
+    console.log(`Client connected: ${socket.id}`);
+
+    // 4a. Send the initial document state.
+    const initialStateMsg: ServerInitialStateMsg = {
+      doc: documentState,
+      revision: currentRevision,
+    };
+    socket.emit("initial_state", initialStateMsg);
+    console.log(`Sent initial state (rev ${currentRevision}) to ${socket.id}`);
+
+    // 4b. Handle client 'push' events.
+    socket.on("push", (msg: ClientPushMsg) => {
+      console.log(
+        `Received push from ${socket.id} based on their rev ${msg.revision}`
+      );
+      try {
+        const clientOp = TextOperation.fromJSON(msg.op);
+        const clientRevision = msg.revision;
+
+        if (clientRevision < 0 || clientRevision > currentRevision) {
+          console.error(
+            `Invalid revision ${clientRevision} from ${socket.id}. Server revision is ${currentRevision}.`
+          );
+          socket.emit("error", {
+            message: `Invalid revision ${clientRevision}. Server is at ${currentRevision}. Please pull.`,
+          });
+          return;
+        }
+
+        // Transform client's op against concurrent operations.
+        const concurrentOps = operationHistory.slice(clientRevision);
+        let transformedClientOp = clientOp;
+        for (const historicalOp of concurrentOps) {
+          if (
+            transformedClientOp.baseLength !== historicalOp.baseLength
+          ) {
+            console.error(
+              `History Inconsistency: Op ${transformedClientOp.toString()} (base ${transformedClientOp.baseLength}) ` +
+                `cannot be transformed against historical op ${historicalOp.toString()} (base ${historicalOp.baseLength}) ` +
+                `at revision ${clientRevision + concurrentOps.indexOf(historicalOp)}`
+            );
+            throw new Error(
+              "Server history inconsistency detected during transform."
+            );
+          }
+          [transformedClientOp] = TextOperation.transform(
+            transformedClientOp,
+            historicalOp
+          );
+        }
+
+        // Apply the transformed op.
+        console.log(
+          `Applying transformed op from ${socket.id}: ${transformedClientOp.toString()}`
+        );
+        documentState = transformedClientOp.apply(documentState);
+        currentRevision++;
+        operationHistory.push(transformedClientOp);
+
+        // ACK back to the originator.
+        const ackMsg: ServerAckMsg = { revision: currentRevision };
+        socket.emit("ack", ackMsg);
+        console.log(
+          `Sent ack (new rev ${currentRevision}) to ${socket.id}`
+        );
+
+        // Broadcast update to all other clients.
+        const updateMsg: ServerUpdateMsg = {
+          revision: currentRevision,
+          op: transformedClientOp.toJSON(),
+        };
+        socket.broadcast.emit("update", updateMsg);
+        console.log(
+          `Broadcast update (rev ${currentRevision}) to other clients`
+        );
+      } catch (error: any) {
+        console.error(
+          `Error processing push from ${socket.id}:`,
+          error.message || error,
+          "Message:",
+          msg
+        );
+        socket.emit("error", {
+          message: `Failed to process operation: ${
+            error.message || "Unknown error"
+          }`,
+        });
+      }
+    });
+
+    // 4c. Handle client 'pull' events.
+    socket.on("pull", (msg: ClientPullMsg) => {
+      console.log(
+        `Received pull from ${socket.id} requesting ops since rev ${msg.revision}`
+      );
       const clientRevision = msg.revision;
 
-      if (
-        clientRevision < 0 ||
-        clientRevision > currentRevision
-      ) {
+      if (clientRevision < 0 || clientRevision > currentRevision) {
         console.error(
-          `Invalid revision ${clientRevision} from ${socket.id}. Server revision is ${currentRevision}.`,
+          `Invalid revision ${clientRevision} in pull request from ${socket.id}. ` +
+            `Server revision is ${currentRevision}. Sending full history.`
         );
-        // Ideally, force client to re-sync here. For now, just ignore.
+        const historyToSend = operationHistory.map((op) => op.toJSON());
+        const historyMsg: ServerHistoryMsg = {
+          startRevision: 1,
+          ops: historyToSend,
+          currentRevision: currentRevision,
+        };
+        socket.emit("history", historyMsg);
+        console.warn(
+          `Sent full history due to invalid pull revision from ${socket.id}`
+        );
         return;
       }
 
-      // Transform the client's operation against concurrent operations
-      // that happened on the server since the client's revision.
-      const concurrentOps = operationHistory.slice(clientRevision);
-      let transformedClientOp = clientOp;
-
-      for (const historicalOp of concurrentOps) {
-        if (transformedClientOp.baseLength !== historicalOp.baseLength) {
-             console.error(`History Inconsistency: Op ${transformedClientOp.toString()} (base ${transformedClientOp.baseLength}) cannot be transformed against historical op ${historicalOp.toString()} (base ${historicalOp.baseLength}) at revision ${clientRevision + concurrentOps.indexOf(historicalOp)}`);
-             // This indicates a server-side bug or corrupted history.
-             // A robust system might try recovery or halt. For prototype, log and proceed cautiously.
-             // We might skip transformation if lengths mismatch, but that breaks OT guarantees.
-             // Let's throw to indicate the critical error.
-             throw new Error("Server history inconsistency detected during transform.");
-        }
-        [transformedClientOp] = TextOperation.transform(
-          transformedClientOp,
-          historicalOp,
-        );
-      }
-
-      // Apply the transformed operation to the document state
-      console.log(
-        `Applying transformed op from ${socket.id}: ${transformedClientOp.toString()}`,
-      );
-      documentState = transformedClientOp.apply(documentState);
-      currentRevision++;
-
-      // Add the *transformed* operation to history
-      operationHistory.push(transformedClientOp);
-
-      // Send ACK to the original client
-      const ackMsg: ServerAckMsg = { revision: currentRevision };
-      socket.emit("ack", ackMsg);
-      console.log(`Sent ack (new rev ${currentRevision}) to ${socket.id}`);
-
-      // Broadcast the *transformed* operation to other clients
-      const updateMsg: ServerUpdateMsg = {
-        revision: currentRevision, // The revision *after* applying the op
-        op: transformedClientOp.toJSON(),
-      };
-      socket.broadcast.emit("update", updateMsg);
-      console.log(
-        `Broadcast update (rev ${currentRevision}) to other clients`,
-      );
-    } catch (error) {
-      console.error(
-        `Error processing push from ${socket.id}:`,
-        error,
-        "Message:",
-        msg,
-      );
-      // Inform client of failure? Maybe send an error message.
-      socket.emit("error", { message: "Failed to process operation." });
-    }
-  });
-
-  // 3. Handle client pulling changes ('pull')
-  socket.on("pull", (msg: ClientPullMsg) => {
-    console.log(
-      `Received pull from ${socket.id} requesting ops since rev ${msg.revision}`,
-    );
-    const clientRevision = msg.revision;
-
-    if (
-      clientRevision < 0 ||
-      clientRevision > currentRevision
-    ) {
-      console.error(
-        `Invalid revision ${clientRevision} in pull request from ${socket.id}. Server revision is ${currentRevision}.`,
-      );
-      // Send current state instead? Or an error? Let's send history from 0.
-       const historyToSend = operationHistory.map(op => op.toJSON());
-       const historyMsg: ServerHistoryMsg = {
-           startRevision: 1, // Ops start transforming from rev 0 to 1
-           ops: historyToSend,
-           currentRevision: currentRevision,
-       };
-       socket.emit("history", historyMsg);
-       console.warn(`Sent full history due to invalid pull revision from ${socket.id}`);
-      return;
-    }
-
-    const opsToSend = operationHistory
+      const opsToSend = operationHistory
         .slice(clientRevision)
         .map((op) => op.toJSON());
-
-    const historyMsg: ServerHistoryMsg = {
-        startRevision: clientRevision + 1, // First op transforms clientRevision -> clientRevision + 1
+      const historyMsg: ServerHistoryMsg = {
+        startRevision: clientRevision + 1,
         ops: opsToSend,
         currentRevision: currentRevision,
-    };
-    socket.emit("history", historyMsg);
-    console.log(`Sent ${opsToSend.length} ops (rev ${clientRevision + 1} to ${currentRevision}) to ${socket.id}`);
+      };
+      socket.emit("history", historyMsg);
+      console.log(
+        `Sent ${opsToSend.length} ops (rev ${clientRevision + 1} to ${currentRevision}) to ${socket.id}`
+      );
+    });
 
-  });
-
-  // 4. Handle disconnect
-  socket.on("disconnect", () => {
-    console.log(`Client disconnected: ${socket.id}`);
+    // 4d. Handle disconnect.
+    socket.on("disconnect", (reason) => {
+      console.log(`Client disconnected: ${socket.id}. Reason: ${reason}`);
+    });
   });
 });
 
+// --- Start the Fastify Server ---
 const PORT = process.env.PORT || 3000;
-io.listen(parseInt(PORT as string, 10));
-console.log(`Socket.IO server listening on port ${PORT}`);
+app.listen({ port: Number(PORT) }, (err, address) => {
+  if (err) {
+    console.error(err);
+    process.exit(1);
+  }
+  console.log(`Collaborative Editor server running at ${address}`);
+});

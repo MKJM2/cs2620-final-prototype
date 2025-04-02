@@ -3100,7 +3100,7 @@ function editorApp() {
           this.addLog("Local changes were made while push was in flight. State -> dirty.");
         } else {
           this.state = "synchronized";
-          this.virtualDoc = this.synchedDoc;
+          this.virtualDoc = this.syncedDoc;
         }
       });
       this.socket.on("update", (msg) => {
