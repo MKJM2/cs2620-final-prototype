@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Real-time Markdown Editor (OT)</title>
+    <link rel="stylesheet" href="style.css" />
+    <!-- Ace Editor -->
+    <script
+      src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.33.0/ace.js"
+      crossorigin="anonymous"
+      referrerpolicy="no-referrer"
+    ></script>
+    <!-- Socket.IO Client -->
+    <script
+      src="https://cdn.socket.io/4.7.5/socket.io.min.js"
+      crossorigin="anonymous"
+    ></script>
+    <!-- Alpine Plugins -->
+    <script
+      defer
+      src="https://cdn.jsdelivr.net/npm/@alpinejs/focus@3.x.x/dist/cdn.min.js"
+    ></script>
+    <!-- Alpine Core -->
+    <script
+      defer
+      src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"
+    ></script>
+  </head>
+  <body>
+    <div
+      class="container"
+      x-data="editorApp"
+      x-init="init"
+    >
+      <h1>Collaborative Markdown Editor (OT Prototype)</h1>
+
+      <div class="status-bar">
+        <span>Status: <strong x-text="statusText">Connecting...</strong></span>
+        <span>Server: <strong x-text="serverUrl">N/A</strong></span>
+        <span>Mode:
+          <select x-model="mode" @change="handleModeChange">
+            <option value="Manual">Manual Push/Pull</option>
+            <option value="Automatic" disabled>Automatic (WIP)</option>
+          </select>
+        </span>
+        <span>Server Rev: <strong x-text="serverRevision">?</strong></span>
+        <span>Client Rev: <strong x-text="localRevision">?</strong></span>
+      </div>
+
+      <div id="side-by-side">
+        <div class="editor-container">
+            <div id="editor"></div>
+        </div>
+        <div class="ot-state-container">
+            <h2>OT State</h2>
+            <div>
+                <strong>Outstanding Op:</strong>
+                <pre x-text="outstandingOp ? JSON.stringify(outstandingOp.toJSON(), null, 2) : 'None'"></pre>
+            </div>
+            <div>
+                <strong>Buffered Op:</strong>
+                <pre x-text="bufferedOp ? JSON.stringify(bufferedOp.toJSON(), null, 2) : 'None'"></pre>
+            </div>
+            <div>
+                <strong>Virtual Doc:</strong>
+                <pre x-text="virtualDoc"></pre>
+            </div>
+        </div>
+      </div>
+      <div class="controls">
+        <button @click="pushChanges" :disabled="!canPush()">
+          Push Changes &uarr;
+        </button>
+        <button @click="pullChanges" :disabled="!canPull()">
+          Pull Changes &darr;
+        </button>
+        <span x-show="state === 'dirty'" class="state-indicator">Unpushed changes</span>
+        <span x-show="state === 'awaitingPush'" class="state-indicator">Pushing...</span>
+         <span x-show="state === 'awaitingPull'" class="state-indicator">Pulling...</span>
+      </div>
+      <div class="log-container">
+        <h2>Operation Log</h2>
+        <ul id="log">
+          <template x-for="(entry, index) in log" :key="index">
+            <li x-text="entry"></li>
+          </template>
+        </ul>
+      </div>
+    </div>
+
+    <!-- Client Bundle (created by Bun build or tsc) -->
+    <script src="/client.js"></script>
+    </script>
+  </body>
+</html>

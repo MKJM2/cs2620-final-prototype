@@ -1,0 +1,59 @@
+# Node.js / Bun dependencies
+node_modules/
+bun.lockb
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.bun/
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+bun-debug.log*
+.bun-debug*
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Editor and IDE files
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Build artifacts
+dist/
+.out/
+.build/
+.cache/
+.next/
+.vercel/
+functions/node_modules/
+serverless/
+
+# Testing
+coverage/
+*.lcov
+jest/
+cypress/screenshots/
+cypress/videos/
+
+# Misc
+*.tgz
+*.bak
+
