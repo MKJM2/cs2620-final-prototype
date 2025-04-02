@@ -193,8 +193,8 @@ describe("TextOperation", () => {
   });
 
   it("should transform insert/insert v2", () => {
-    const op3 = new TextOperation().retain(2).insert("X"); // abXdef
-    const op4 = new TextOperation().retain(4).insert("Y"); // abcdYef
+    const op3 = new TextOperation().retain(2).insert("X").delete(1).retain(3); // abXdef
+    const op4 = new TextOperation().retain(4).insert("Y").retain(2); // abcdYef
     transformTest(doc, op3, op4);
   });
 
@@ -262,7 +262,7 @@ describe("Extended TextOperation Tests", () => {
       .delete(0);
     // Expect consecutive retains, inserts, deletes to be merged.
     expect(op.ops.length).toBe(3);
-    expect(op.ops).toBe([5, "lorem", -6]);
+    expect(String(op.ops)).toBe(String([5, "lorem", -6]));
   });
 
   it("should apply random operations correctly (500 iterations)", randomTest(500, () => {
