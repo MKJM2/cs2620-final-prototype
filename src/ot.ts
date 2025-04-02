@@ -82,12 +82,11 @@ export class TextOperation {
       this.ops[this.ops.length - 1] = lastOp + newOp;
     } else if (isDelete(newOp) && isDelete(lastOp)) {
       this.ops[this.ops.length - 1] = (lastOp as number) + newOp;
-    } else if (isDelete(newOp) && isInsert(lastOp)) {
+    } else if (isInsert(newOp) && isDelete(lastOp)) {
       // Canonical form: Insert comes before delete.
       // Check previous op.
       if (isInsert(this.ops[this.ops.length - 2])) {
-        this.ops[this.ops.length - 2] += lastOp;
-        this.ops[this.ops.length - 1] = newOp;
+        this.ops[this.ops.length - 2] += newOp;
       } else {
         this.ops.push(this.ops[this.ops.length - 1]);
         this.ops[this.ops.length - 2] = newOp;

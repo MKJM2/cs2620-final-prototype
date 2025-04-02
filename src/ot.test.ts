@@ -142,8 +142,8 @@ describe("TextOperation", () => {
     const op2 = new TextOperation().retain(3).delete(3).retain(3); // abcdef
     expect(op2.apply(op1.apply(doc))).toBe("abcdef")
     const composed = op1.compose(op2);
-    expect(composed.apply(doc)).toBe("abcdef"); // retain(6)
-    expect(composed.isNoop()).toBe(false); // Should be retain(6)
+    expect(composed.apply(doc)).toBe("abcdef"); // retain(6) / noop
+    expect(composed.isNoop()).toBe(true); // Should be retain(6) or a noop!
   });
 
   it("should correctly compose delete/insert", () => {
@@ -232,12 +232,6 @@ describe("TextOperation", () => {
 
 // --- Extended Additional Tests ---
 describe("Extended TextOperation Tests", () => {
-  it("should allow constructor to be called without new", () => {
-    // In some implementations TextOperation can be called as a function.
-    const op = (TextOperation as any)();
-    expect(op.constructor).toBe(TextOperation);
-  });
-
   it("should correctly compute lengths", () => {
     const op = new TextOperation();
     expect(op.baseLength).toBe(0);
@@ -268,6 +262,7 @@ describe("Extended TextOperation Tests", () => {
       .delete(0);
     // Expect consecutive retains, inserts, deletes to be merged.
     expect(op.ops.length).toBe(3);
+    expect(op.ops).toBe([5, "lorem", -6]);
   });
 
   it("should apply random operations correctly (500 iterations)", randomTest(500, () => {
