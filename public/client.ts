@@ -146,8 +146,9 @@ function editorApp() {
      * virtual document.
      */
     handleLocalDelta(delta: Ace.Delta) {
+      console.log("Delta:", delta.start, delta.end, delta.action, delta.lines);
       if (this.ignoreNextEditorChange) {
-        console.log("Ignoring delta:", delta);
+        console.log("Ignoring...")
         this.ignoreNextEditorChange = false;
         return;
       }
@@ -184,7 +185,6 @@ function editorApp() {
       this.editor.setReadOnly(true); // Read-only until connected and state received
 
       this.editor.session.on("change", (delta: Ace.Delta) => {
-        console.log(delta);
         this.handleLocalDelta(delta);
         /*
         if (this.ignoreNextEditorChange) {
@@ -211,8 +211,9 @@ function editorApp() {
 
     /** Initialize Socket.IO Connection */
     initSocketIO() {
+      console.log("Initializing websocket connection...");
       // this.socket = io(this.serverUrl);
-      this.socket = io();
+      this.socket = io({transports: ['websocket'], upgrade: false});
 
       this.socket.on("connect", () => {
         this.isConnected = true;
@@ -544,9 +545,6 @@ function editorApp() {
   };
 }
 
-if (window.Alpine) {
-  Alpine.data("editorApp", editorApp);
-}
 
 // Register with AlpineJS AFTER Alpine is initialized
 document.addEventListener('alpine:init', () => {

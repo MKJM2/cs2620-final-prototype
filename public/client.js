@@ -3035,8 +3035,9 @@ function editorApp() {
       this.bufferedOp = null;
     },
     handleLocalDelta(delta) {
+      console.log("Delta:", delta.start, delta.end, delta.action, delta.lines);
       if (this.ignoreNextEditorChange) {
-        console.log("Ignoring delta:", delta);
+        console.log("Ignoring...");
         this.ignoreNextEditorChange = false;
         return;
       }
@@ -3062,12 +3063,12 @@ function editorApp() {
       this.editor.session.setMode("ace/mode/markdown");
       this.editor.setReadOnly(true);
       this.editor.session.on("change", (delta) => {
-        console.log(delta);
         this.handleLocalDelta(delta);
       });
     },
     initSocketIO() {
-      this.socket = lookup2();
+      console.log("Initializing websocket connection...");
+      this.socket = lookup2({ transports: ["websocket"], upgrade: false });
       this.socket.on("connect", () => {
         this.isConnected = true;
         this.statusText = "Connected";
@@ -3303,9 +3304,6 @@ function editorApp() {
       this.addLog("Client initialized. Waiting for connection...");
     }
   };
-}
-if (window.Alpine) {
-  Alpine.data("editorApp", editorApp);
 }
 document.addEventListener("alpine:init", () => {
   console.log("Alpine initializing, registering editorApp component...");
