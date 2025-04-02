@@ -22,8 +22,7 @@ const __dirname = path.dirname(__filename);
 console.log("Starting OT Server...");
 
 // --- OT Server State ---
-let documentState =
-  "# Collaborative Markdown Editor\n\nStart editing!";
+let documentState = "abcdef";
 let currentRevision = 0;
 // History of applied operations (each op takes state from rev n to rev n+1)
 const operationHistory: TextOperation[] = [];
@@ -48,14 +47,13 @@ app.register(fastifyIO, {
 const publicDir = path.resolve(__dirname, "../public");
 app.register(fastifyStatic, {
   root: publicDir,
-  prefix: "/", // e.g. /public/client.js, /public/style.css, etc.
-  wildcard: false
+  prefix: "/public", // e.g. /public/client.js, /public/style.css, etc.
 });
 
 // Serve index.html at the root path.
-//app.get("/", (req, reply) => {
-  //reply.sendFile("index.html");
-//});
+app.get("/", (_req, reply) => {
+  reply.sendFile("index.html");
+});
 
 
 app.ready().then(() => {
@@ -98,8 +96,8 @@ app.ready().then(() => {
           ) {
             console.error(
               `History Inconsistency: Op ${transformedClientOp.toString()} (base ${transformedClientOp.baseLength}) ` +
-                `cannot be transformed against historical op ${historicalOp.toString()} (base ${historicalOp.baseLength}) ` +
-                `at revision ${clientRevision + concurrentOps.indexOf(historicalOp)}`
+              `cannot be transformed against historical op ${historicalOp.toString()} (base ${historicalOp.baseLength}) ` +
+              `at revision ${clientRevision + concurrentOps.indexOf(historicalOp)}`
             );
             throw new Error(
               "Server history inconsistency detected during transform."
@@ -143,9 +141,8 @@ app.ready().then(() => {
           msg
         );
         socket.emit("error", {
-          message: `Failed to process operation: ${
-            error.message || "Unknown error"
-          }`,
+          message: `Failed to process operation: ${error.message || "Unknown error"
+            }`,
         });
       }
     });
@@ -160,7 +157,7 @@ app.ready().then(() => {
       if (clientRevision < 0 || clientRevision > currentRevision) {
         console.error(
           `Invalid revision ${clientRevision} in pull request from ${socket.id}. ` +
-            `Server revision is ${currentRevision}. Sending full history.`
+          `Server revision is ${currentRevision}. Sending full history.`
         );
         const historyToSend = operationHistory.map((op) => op.toJSON());
         const historyMsg: ServerHistoryMsg = {
@@ -190,7 +187,7 @@ app.ready().then(() => {
     });
 
     // 4d. Handle disconnect.
-    socket.on("disconnect", (reason) => {
+    socket.on("disconnect", (reason: any) => {
       console.log(`Client disconnected: ${socket.id}. Reason: ${reason}`);
     });
   });

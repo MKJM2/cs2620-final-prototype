@@ -168,6 +168,42 @@ export class TextOperation {
   }
 
   /**
+   * Returns the inner Operation Component from a complex
+   * TextOperation. Skips over retain() micro-ops.
+   * @param op - The TextOperation to pull a simple micro-op out of.
+   * @returns A single OperationComponent micro-op
+   */
+  getSimpleOp(): OperationComponent | null {
+    switch (this.ops.length) {
+      case 1: return isRetain(this.ops[0]) ? null : this.ops[0];
+      case 2: return isRetain(this.ops[0]) ? (isRetain(this.ops[1]) ? null : this.ops[1]) : this.ops[0];
+    }
+    return null;
+  }
+
+  /**
+   * Checks if two operations can be composed together.
+   * @returns True if the two operations should be composed.
+   */
+  shouldBeComposedWith(other: TextOperation): boolean {
+    if (this.isNoop() || other.isNoop()) {
+      return true;
+    }
+    let op1 = this.getSimpleOp();
+    let op2 = other.getSimpleOp();
+    if (!op1 || !op2) {
+      return false
+    }
+    if (isInsert(op1) && isInsert(op2)) {
+      return true;
+    }
+    if (isDelete(op1) && isDelete(op2)) {
+      return true;
+    }
+    return false;
+  }
+
+  /**
    * Applies the operation to a document string.
    * @param doc - The document string to apply the operation to.
    * @returns The transformed document string.
@@ -203,10 +239,10 @@ export class TextOperation {
 
     // Sanity check - should not happen if logic is correct
     if (newDoc.length !== this.targetLength) {
-        console.warn(`Internal inconsistency: Calculated targetLength (${this.targetLength}) differs from actual result length (${newDoc.length}). Op: ${this.toString()}, BaseDoc: "${doc}"`);
-        // Allow proceeding but log warning, as targetLength might be slightly off due to complex merges
-        // but the resulting document is likely correct based on apply logic.
-        // For strict correctness, one might throw here.
+      console.warn(`Internal inconsistency: Calculated targetLength (${this.targetLength}) differs from actual result length (${newDoc.length}). Op: ${this.toString()}, BaseDoc: "${doc}"`);
+      // Allow proceeding but log warning, as targetLength might be slightly off due to complex merges
+      // but the resulting document is likely correct based on apply logic.
+      // For strict correctness, one might throw here.
     }
 
 
@@ -394,12 +430,12 @@ export class TextOperation {
       // If one operation is exhausted, the other must also be (due to baseLength check).
       // This check prevents infinite loops if logic above has errors.
       if (currentOp1 === undefined || currentOp2 === undefined) {
-          // If one is undefined, the other must also be undefined due to the baseLength equality.
-          // If not, it indicates an internal inconsistency or malformed operation.
-          if (currentOp1 !== undefined || currentOp2 !== undefined) {
-              throw new Error(`Operation length mismatch during transform despite equal base lengths. Op1: ${op1.toString()}, Op2: ${op2.toString()}`);
-          }
-          break; // Both are undefined, normal exit.
+        // If one is undefined, the other must also be undefined due to the baseLength equality.
+        // If not, it indicates an internal inconsistency or malformed operation.
+        if (currentOp1 !== undefined || currentOp2 !== undefined) {
+          throw new Error(`Operation length mismatch during transform despite equal base lengths. Op1: ${op1.toString()}, Op2: ${op2.toString()}`);
+        }
+        break; // Both are undefined, normal exit.
       }
 
 
@@ -516,9 +552,9 @@ export class TextOperation {
   toString(): string {
     return this.ops
       .map((op) => {
-        if (isRetain(op)) return `retain(${op})`;
-        if (isInsert(op)) return `insert("${op}")`;
-        if (isDelete(op)) return `delete(${-op})`;
+        if (isRetain(op)) return `retain ${op}`;
+        if (isInsert(op)) return `insert '${op}'`;
+        if (isDelete(op)) return `delete ${-op}`;
         return "invalid"; // Should not happen
       })
       .join(", ");

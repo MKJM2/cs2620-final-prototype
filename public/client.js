@@ -2685,6 +2685,32 @@ class TextOperation {
   isNoop() {
     return this.ops.length === 0 || this.ops.length === 1 && isRetain(this.ops[0]);
   }
+  getSimpleOp() {
+    switch (this.ops.length) {
+      case 1:
+        return isRetain(this.ops[0]) ? null : this.ops[0];
+      case 2:
+        return isRetain(this.ops[0]) ? isRetain(this.ops[1]) ? null : this.ops[1] : this.ops[0];
+    }
+    return null;
+  }
+  shouldBeComposedWith(other) {
+    if (this.isNoop() || other.isNoop()) {
+      return true;
+    }
+    let op1 = this.getSimpleOp();
+    let op2 = other.getSimpleOp();
+    if (!op1 || !op2) {
+      return false;
+    }
+    if (isInsert(op1) && isInsert(op2)) {
+      return true;
+    }
+    if (isDelete(op1) && isDelete(op2)) {
+      return true;
+    }
+    return false;
+  }
   apply(doc) {
     if (doc.length !== this.baseLength) {
       throw new Error(`Operation base length (${this.baseLength}) does not match document length (${doc.length}). Op: ${this.toString()}`);
@@ -2930,11 +2956,11 @@ class TextOperation {
   toString() {
     return this.ops.map((op) => {
       if (isRetain(op))
-        return `retain(${op})`;
+        return `retain ${op}`;
       if (isInsert(op))
-        return `insert("${op}")`;
+        return `insert '${op}'`;
       if (isDelete(op))
-        return `delete(${-op})`;
+        return `delete ${-op}`;
       return "invalid";
     }).join(", ");
   }
@@ -2950,21 +2976,22 @@ function positionToIndex(lines, pos) {
   return index;
 }
 function convertAceDeltaToOp(delta) {
-  const baseLines = this.virtualDoc.split(`
+  const text = this.virtualDoc;
+  const lines = text.split(`
 `);
-  const index = positionToIndex(baseLines, delta.start);
+  const index = positionToIndex(lines, delta.start);
   const op = new TextOperation;
-  op.retain(index);
+  if (index != 0) {
+    op.retain(index);
+  }
   if (delta.action === "insert") {
-    const text = delta.lines.join(`
+    const text2 = delta.lines.join(`
 `);
-    op.insert(text);
-    op.retain(this.virtualDoc.length - index);
+    op.insert(text2);
   } else if (delta.action === "remove") {
     const removedText = delta.lines.join(`
 `);
     op.delete(removedText.length);
-    op.retain(this.virtualDoc.length - (index + removedText.length));
   }
   return op;
 }
@@ -2972,7 +2999,7 @@ function editorApp() {
   return {
     editor: null,
     socket: null,
-    serverUrl: "ws://localhost:3000",
+    serverUrl: "http://localhost:3000",
     statusText: "Connecting...",
     isConnected: false,
     mode: "Manual",
@@ -3002,21 +3029,19 @@ function editorApp() {
       if (!this.editor)
         return;
       this.ignoreNextEditorChange = true;
-      const currentPosition = this.editor.getCursorPosition();
       this.editor.setValue(value2, -1);
-      this.editor.moveCursorToPosition(currentPosition);
-      this.editor.clearSelection();
       this.syncedDoc = value2;
       this.virtualDoc = value2;
       this.bufferedOp = null;
-      setTimeout(() => {
-        this.ignoreNextEditorChange = false;
-      }, 0);
     },
     handleLocalDelta(delta) {
-      if (this.ignoreNextEditorChange)
+      if (this.ignoreNextEditorChange) {
+        console.log("Ignoring delta:", delta);
+        this.ignoreNextEditorChange = false;
         return;
+      }
       const op = convertAceDeltaToOp.call(this, delta);
+      console.log("Handle local change:", op);
       if (this.bufferedOp) {
         this.bufferedOp = this.bufferedOp.compose(op);
       } else {
@@ -3035,14 +3060,14 @@ function editorApp() {
       this.editor = ace.edit("editor");
       this.editor.setTheme("ace/theme/monokai");
       this.editor.session.setMode("ace/mode/markdown");
-      this.editor.setValue("Loading document...", -1);
       this.editor.setReadOnly(true);
       this.editor.session.on("change", (delta) => {
+        console.log(delta);
         this.handleLocalDelta(delta);
       });
     },
     initSocketIO() {
-      this.socket = lookup2(this.serverUrl);
+      this.socket = lookup2();
       this.socket.on("connect", () => {
         this.isConnected = true;
         this.statusText = "Connected";

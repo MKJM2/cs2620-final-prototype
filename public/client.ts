@@ -1,7 +1,7 @@
 // public/client.ts
 import type { Ace } from "ace";
 import { io, Socket } from "socket.io-client";
-import { TextOperation, OperationComponent } from "../src/ot"; // Adjust path
+import { TextOperation } from "../src/ot"; // Adjust path
 import type {
   ServerInitialStateMsg,
   ServerAckMsg,
@@ -12,7 +12,7 @@ import type {
 } from "../src/types"; // Adjust path
 
 // Make ace available globally if needed, or import types if using modules
-declare var ace : Ace | null;
+declare var ace: Ace | null;
 
 // Declare Alpine as globally available (since it's loaded from CDN)
 declare var Alpine: any;
@@ -37,24 +37,28 @@ function positionToIndex(lines: string[], pos: { row: number; column: number }) 
  */
 function convertAceDeltaToOp(this: any, delta: any): TextOperation {
   // Use virtualDoc (the last synced plus buffered changes) as base
-  const baseLines = this.virtualDoc.split("\n");
-  const index = positionToIndex(baseLines, delta.start);
+  const text: string = this.virtualDoc;
+  const lines: string[] = text.split("\n");
+
+  const index = positionToIndex(lines, delta.start);
   const op = new TextOperation();
 
-  // Our op should “retain” everything up to the change
-  op.retain(index);
+  // Our op should “retain” everything up to the change, unless retain is 0
+  if (index != 0) {
+    op.retain(index);
+  }
 
   if (delta.action === "insert") {
     const text = delta.lines.join("\n");
     op.insert(text);
     // Final retain: remaining length from the base.
-    op.retain(this.virtualDoc.length - index);
+    // op.retain(this.virtualDoc.length - index);
   } else if (delta.action === "remove") {
     // For removal, the delta object has an 'end' property.
     // Compute the deletion length based on the removed text.
     const removedText = delta.lines.join("\n");
     op.delete(removedText.length);
-    op.retain(this.virtualDoc.length - (index + removedText.length));
+    // op.retain(this.virtualDoc.length - (index + removedText.length));
   }
 
   return op;
@@ -67,7 +71,7 @@ function editorApp() {
     // --- State ---
     editor: null as Ace.Editor | null, // Ace editor instance
     socket: null as Socket | null,
-    serverUrl: "ws://localhost:3000", // Default server URL
+    serverUrl: "http://localhost:3000", // Default server URL
     statusText: "Connecting...",
     isConnected: false,
     mode: "Manual", // 'Manual' or 'Automatic'
@@ -82,7 +86,7 @@ function editorApp() {
     virtualDoc: "",
     /** Last known revision acknowledged by the server */
     serverRevision: -1,
-     /** Revision of the local editor content (can be ahead of serverRevision if offline changes exist) */
+    /** Revision of the local editor content (can be ahead of serverRevision if offline changes exist) */
     localRevision: -1, // Not strictly needed in pure manual mode, but useful conceptually
     /** Current state of the client relative to the server */
     state: "initializing" as
@@ -130,19 +134,11 @@ function editorApp() {
     setEditorValue(value: string) {
       if (!this.editor) return;
       this.ignoreNextEditorChange = true;
-      const currentPosition = this.editor.getCursorPosition();
       this.editor.setValue(value, -1); // -1 moves cursor to start, preserve below
-      this.editor.moveCursorToPosition(currentPosition);
-      this.editor.clearSelection();
       // Reset OT state on programmatic changes:
       this.syncedDoc = value;
       this.virtualDoc = value;
       this.bufferedOp = null;
-      // The ignore flag should ideally be reset *after* the change event potentially fires,
-      // but a small timeout is often pragmatic.
-      setTimeout(() => {
-        this.ignoreNextEditorChange = false;
-      }, 0);
     },
 
     /** Process a local Ace delta event by converting it to a TextOperation,
@@ -150,10 +146,15 @@ function editorApp() {
      * virtual document.
      */
     handleLocalDelta(delta: Ace.Delta) {
-      if (this.ignoreNextEditorChange) return;
+      if (this.ignoreNextEditorChange) {
+        console.log("Ignoring delta:", delta);
+        this.ignoreNextEditorChange = false;
+        return;
+      }
 
       // Convert the delta to a small operation.
       const op: TextOperation = convertAceDeltaToOp.call(this, delta);
+      console.log("Handle local change:", op);
       // Compose with any existing buffered operation.
       if (this.bufferedOp) {
         this.bufferedOp = this.bufferedOp.compose(op);
@@ -180,10 +181,10 @@ function editorApp() {
       this.editor = ace.edit("editor");
       this.editor.setTheme("ace/theme/monokai");
       this.editor.session.setMode("ace/mode/markdown");
-      this.editor.setValue("Loading document...", -1);
       this.editor.setReadOnly(true); // Read-only until connected and state received
 
       this.editor.session.on("change", (delta: Ace.Delta) => {
+        console.log(delta);
         this.handleLocalDelta(delta);
         /*
         if (this.ignoreNextEditorChange) {
@@ -210,7 +211,8 @@ function editorApp() {
 
     /** Initialize Socket.IO Connection */
     initSocketIO() {
-      this.socket = io(this.serverUrl);
+      // this.socket = io(this.serverUrl);
+      this.socket = io();
 
       this.socket.on("connect", () => {
         this.isConnected = true;
@@ -235,9 +237,9 @@ function editorApp() {
         this.statusText = `Connection Error`;
         this.addLog(`Connection error: ${err.message}`);
         this.state = "initializing";
-         this.serverRevision = -1;
-         this.localRevision = -1;
-         this.outstandingOp = null;
+        this.serverRevision = -1;
+        this.localRevision = -1;
+        this.outstandingOp = null;
         this.editor?.setReadOnly(true);
       });
 
@@ -264,9 +266,9 @@ function editorApp() {
           return; // Ignore unexpected ACKs
         }
         if (!this.outstandingOp) {
-             this.addLog(`Warning: Received ACK for revision ${msg.revision} but no outstanding operation was recorded.`);
-             this.state = 'synchronized'; // Try to recover state
-             return;
+          this.addLog(`Warning: Received ACK for revision ${msg.revision} but no outstanding operation was recorded.`);
+          this.state = 'synchronized'; // Try to recover state
+          return;
         }
 
         this.addLog(`Push acknowledged by server. New revision: ${msg.revision}`);
@@ -281,10 +283,10 @@ function editorApp() {
 
         // Check if editor content still differs from the newly synced state
         if (this.bufferedOp) {
-            this.state = "dirty";
-            this.addLog("Local changes were made while push was in flight. State -> dirty.");
+          this.state = "dirty";
+          this.addLog("Local changes were made while push was in flight. State -> dirty.");
         } else {
-            this.state = "synchronized";
+          this.state = "synchronized";
           this.virtualDoc = this.syncedDoc;
         }
       });
@@ -310,9 +312,9 @@ function editorApp() {
         // 1. Transform against outstanding operation (if any)
         if (this.outstandingOp) {
           if (this.outstandingOp.baseLength !== serverOp.baseLength) {
-              this.addLog(`CRITICAL ERROR: Base length mismatch during transform (update). Outstanding: ${this.outstandingOp.baseLength}, Server: ${serverOp.baseLength}. Forcing pull.`);
-              this.pullChanges();
-              return;
+            this.addLog(`CRITICAL ERROR: Base length mismatch during transform (update). Outstanding: ${this.outstandingOp.baseLength}, Server: ${serverOp.baseLength}. Forcing pull.`);
+            this.pullChanges();
+            return;
           }
           try {
             const [serverOpPrime, outstandingOpPrime] =
@@ -321,19 +323,19 @@ function editorApp() {
             this.outstandingOp = outstandingOpPrime;
             this.addLog(`Transformed server op against outstanding op.`);
           } catch (e: any) {
-             this.addLog(`CRITICAL ERROR during transform (update): ${e.message}. Forcing pull.`);
-             this.pullChanges();
-             return;
+            this.addLog(`CRITICAL ERROR during transform (update): ${e.message}. Forcing pull.`);
+            this.pullChanges();
+            return;
           }
         }
 
         // 2. Apply the (potentially transformed) serverOp to our syncedDoc baseline
         try {
-            this.syncedDoc = serverOp.apply(this.syncedDoc);
+          this.syncedDoc = serverOp.apply(this.syncedDoc);
         } catch (e: any) {
-            this.addLog(`CRITICAL ERROR applying server op to syncedDoc: ${e.message}. Forcing pull.`);
-            this.pullChanges();
-            return;
+          this.addLog(`CRITICAL ERROR applying server op to syncedDoc: ${e.message}. Forcing pull.`);
+          this.pullChanges();
+          return;
         }
 
 
@@ -345,29 +347,29 @@ function editorApp() {
         // If we are in 'dirty' state, there are local changes *not* included in outstandingOp.
         // We need to transform the serverOp against these implicit local changes.
         if (this.state === 'dirty' && this.bufferedOp) {
-            try {
-                // We transform the server op (already transformed against outstanding)
-                // against the remaining local changes.
-                // The order matters: transform(serverOp, localChangesOp)
-                // We only care about the transformed server op to apply to the editor.
-                [editorOpToApply, this.bufferedOp] = TextOperation.transform(serverOp, this.bufferedOp);
-                this.addLog(`Transformed server op against dirty local changes.`);
-            } catch (e: any) {
-                this.addLog(`CRITICAL ERROR during transform (dirty): ${e.message}. Forcing pull.`);
-                this.pullChanges();
-                return;
-            }
+          try {
+            // We transform the server op (already transformed against outstanding)
+            // against the remaining local changes.
+            // The order matters: transform(serverOp, localChangesOp)
+            // We only care about the transformed server op to apply to the editor.
+            [editorOpToApply, this.bufferedOp] = TextOperation.transform(serverOp, this.bufferedOp);
+            this.addLog(`Transformed server op against dirty local changes.`);
+          } catch (e: any) {
+            this.addLog(`CRITICAL ERROR during transform (dirty): ${e.message}. Forcing pull.`);
+            this.pullChanges();
+            return;
+          }
         }
 
         // 4. Apply the final transformed server operation to the editor
         try {
-            const newEditorContent = editorOpToApply.apply(currentEditorContent);
-            this.setEditorValue(newEditorContent);
-            this.addLog(`Applied transformed server op to editor.`);
+          const newEditorContent = editorOpToApply.apply(currentEditorContent);
+          this.setEditorValue(newEditorContent);
+          this.addLog(`Applied transformed server op to editor.`);
         } catch (e: any) {
-            this.addLog(`CRITICAL ERROR applying transformed server op to editor: ${e.message}. Forcing pull.`);
-            this.pullChanges();
-            return;
+          this.addLog(`CRITICAL ERROR applying transformed server op to editor: ${e.message}. Forcing pull.`);
+          this.pullChanges();
+          return;
         }
 
 
@@ -378,22 +380,22 @@ function editorApp() {
         // Re-evaluate state: if outstandingOp still exists, we are still awaiting ACK.
         // If not, and editor content matches syncedDoc, we are synchronized. Otherwise, dirty.
         if (!this.outstandingOp) {
-            if (this.editor?.getValue() === this.syncedDoc) {
-                this.state = 'synchronized';
-            } else {
-                this.state = 'dirty';
-                this.addLog("Editor content still differs after update. State -> dirty.");
-            }
+          if (this.editor?.getValue() === this.syncedDoc) {
+            this.state = 'synchronized';
+          } else {
+            this.state = 'dirty';
+            this.addLog("Editor content still differs after update. State -> dirty.");
+          }
         }
 
       });
 
       this.socket.on("history", (msg: ServerHistoryMsg) => {
-         if (this.state !== 'awaitingPull') {
-             this.addLog(`Warning: Received unexpected history. State: ${this.state}`);
-             // Might happen if pull was triggered by an error condition. Allow processing.
-             // return;
-         }
+        if (this.state !== 'awaitingPull') {
+          this.addLog(`Warning: Received unexpected history. State: ${this.state}`);
+          // Might happen if pull was triggered by an error condition. Allow processing.
+          // return;
+        }
         this.addLog(
           `Received history: ${msg.ops.length} ops (rev ${msg.startRevision} to ${msg.currentRevision})`,
         );
@@ -404,84 +406,84 @@ function editorApp() {
         // but let's try applying the history for robustness.
 
         if (msg.startRevision !== this.serverRevision + 1) {
-             this.addLog(`Warning: History start revision ${msg.startRevision} doesn't match expected ${this.serverRevision + 1}. Resetting might be needed.`);
-             // Attempt to apply anyway, but this indicates potential issues.
+          this.addLog(`Warning: History start revision ${msg.startRevision} doesn't match expected ${this.serverRevision + 1}. Resetting might be needed.`);
+          // Attempt to apply anyway, but this indicates potential issues.
         }
 
         let currentEditorContent = this.editor.getValue();
 
         try {
-            for (const opJson of msg.ops) {
-                let serverOp = TextOperation.fromJSON(opJson);
-                const expectedRevision = this.serverRevision + 1; // Revision this op transforms *from*
+          for (const opJson of msg.ops) {
+            let serverOp = TextOperation.fromJSON(opJson);
+            const expectedRevision = this.serverRevision + 1; // Revision this op transforms *from*
 
-                 // Transform against outstanding op first
-                 if (this.outstandingOp) {
-                     if (this.outstandingOp.baseLength !== serverOp.baseLength) {
-                         throw new Error(`History transform (outstanding) base length mismatch at rev ${expectedRevision}. Op: ${serverOp.toString()}, Outstanding: ${this.outstandingOp.toString()}`);
-                     }
-                     [serverOp, this.outstandingOp] = TextOperation.transform(serverOp, this.outstandingOp);
-                 }
-
-                 // Apply transformed op to syncedDoc baseline
-                 this.syncedDoc = serverOp.apply(this.syncedDoc);
-
-                 // Apply transformed op to editor content (considering dirty state implicitly)
-                 // Similar logic as in 'update', but repeated for each historical op.
-                 let editorOpToApply = serverOp;
-              if ((this.state === 'dirty' || this.editor.getValue() !== this.syncedDoc) && this.bufferedOp) { // Check actual content diff
-                     [editorOpToApply, this.bufferedOp] = TextOperation.transform(serverOp, this.bufferedOp);
-                 }
-
-                 currentEditorContent = editorOpToApply.apply(currentEditorContent);
-                 this.serverRevision++; // Increment revision for each applied op
-            }
-
-            // After applying all history, set the editor value
-            this.setEditorValue(currentEditorContent);
-            this.serverRevision = msg.currentRevision; // Ensure final revision matches server
-            this.localRevision = msg.currentRevision; // Align local revision
-
-            this.addLog(`Applied history. Now at server revision ${this.serverRevision}.`);
-
-            // Final state check
+            // Transform against outstanding op first
             if (this.outstandingOp) {
-                this.state = 'awaitingPush'; // Still waiting for original push ACK
-            } else if (this.editor?.getValue() !== this.syncedDoc) {
-                this.state = 'dirty';
-            } else {
-                this.state = 'synchronized';
+              if (this.outstandingOp.baseLength !== serverOp.baseLength) {
+                throw new Error(`History transform (outstanding) base length mismatch at rev ${expectedRevision}. Op: ${serverOp.toString()}, Outstanding: ${this.outstandingOp.toString()}`);
+              }
+              [serverOp, this.outstandingOp] = TextOperation.transform(serverOp, this.outstandingOp);
             }
+
+            // Apply transformed op to syncedDoc baseline
+            this.syncedDoc = serverOp.apply(this.syncedDoc);
+
+            // Apply transformed op to editor content (considering dirty state implicitly)
+            // Similar logic as in 'update', but repeated for each historical op.
+            let editorOpToApply = serverOp;
+            if ((this.state === 'dirty' || this.editor.getValue() !== this.syncedDoc) && this.bufferedOp) { // Check actual content diff
+              [editorOpToApply, this.bufferedOp] = TextOperation.transform(serverOp, this.bufferedOp);
+            }
+
+            currentEditorContent = editorOpToApply.apply(currentEditorContent);
+            this.serverRevision++; // Increment revision for each applied op
+          }
+
+          // After applying all history, set the editor value
+          this.setEditorValue(currentEditorContent);
+          this.serverRevision = msg.currentRevision; // Ensure final revision matches server
+          this.localRevision = msg.currentRevision; // Align local revision
+
+          this.addLog(`Applied history. Now at server revision ${this.serverRevision}.`);
+
+          // Final state check
+          if (this.outstandingOp) {
+            this.state = 'awaitingPush'; // Still waiting for original push ACK
+          } else if (this.editor?.getValue() !== this.syncedDoc) {
+            this.state = 'dirty';
+          } else {
+            this.state = 'synchronized';
+          }
 
         } catch (error: any) {
-            this.addLog(`CRITICAL ERROR applying history: ${error.message}. Requesting full reset.`);
-            this.state = 'initializing';
-            this.editor?.setReadOnly(true);
-            this.editor?.setValue("Error applying history. Reconnecting...");
-            // Force reconnect to get fresh initial state
-            this.socket?.disconnect().connect();
+          this.addLog(`CRITICAL ERROR applying history: ${error.message}. Requesting full reset.`);
+          this.state = 'initializing';
+          this.editor?.setReadOnly(true);
+          this.editor?.setValue("Error applying history. Reconnecting...");
+          // Force reconnect to get fresh initial state
+          this.socket?.disconnect().connect();
         } finally {
-             if (this.state === 'awaitingPull') {
-                 // If we were awaiting pull, transition based on outcome
-                 if (!this.outstandingOp && this.state !== 'initializing') {
-                     if (this.editor?.getValue() === this.syncedDoc) this.state = 'synchronized';
-                     else this.state = 'dirty';
-                 } else if (this.outstandingOp) {
-                     this.state = 'awaitingPush';
-                 }
-             }
+          if (this.state === 'awaitingPull') {
+            // If we were awaiting pull, transition based on outcome
+            if (!this.outstandingOp && this.state !== 'initializing') {
+              if (this.editor?.getValue() === this.syncedDoc) this.state = 'synchronized';
+              else this.state = 'dirty';
+            } else if (this.outstandingOp) {
+              this.state = 'awaitingPush';
+            }
+          }
         }
       });
 
-       this.socket.on("error", (msg: { message: string }) => {
-           this.addLog(`Server Error: ${msg.message}`);
-           // Could indicate push failure, etc. May need recovery logic.
-           if (this.state === 'awaitingPush') {
-               this.addLog("Push likely failed on server. Resetting outstanding op.");
-               this.outstandingOp = null;
-               this.state = 'dirty'; // Assume local changes still exist
-           }
-       });
+      this.socket.on("error", (msg: { message: string }) => {
+        this.addLog(`Server Error: ${msg.message}`);
+        // Could indicate push failure, etc. May need recovery logic.
+        if (this.state === 'awaitingPush') {
+          this.addLog("Push likely failed on server. Resetting outstanding op.");
+          this.outstandingOp = null;
+          this.state = 'dirty'; // Assume local changes still exist
+        }
+      });
     },
 
     /** Handle mode change */
@@ -543,11 +545,11 @@ function editorApp() {
 }
 
 if (window.Alpine) {
-    Alpine.data("editorApp", editorApp);
+  Alpine.data("editorApp", editorApp);
 }
 
 // Register with AlpineJS AFTER Alpine is initialized
 document.addEventListener('alpine:init', () => {
-    console.log("Alpine initializing, registering editorApp component...");
-    Alpine.data('editorApp', editorApp);
+  console.log("Alpine initializing, registering editorApp component...");
+  Alpine.data('editorApp', editorApp);
 });
