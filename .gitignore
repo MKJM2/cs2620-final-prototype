@@ -57,3 +57,5 @@ cypress/videos/
 *.tgz
 *.bak
 
+./public/*.js
+
