@@ -52,7 +52,7 @@ function convertAceDeltaToOp(this: any, delta: any): TextOperation {
     const text = delta.lines.join("\n");
     op.insert(text);
     // Final retain: remaining length from the base.
-     op.retain(this.virtualDoc.length - index);
+    op.retain(this.virtualDoc.length - index);
   } else if (delta.action === "remove") {
     // For removal, the delta object has an 'end' property.
     // Compute the deletion length based on the removed text.
@@ -130,11 +130,32 @@ function editorApp() {
       }
     },
 
+
+    withNoLocalUpdate(task: (...args: any[]) => any): (...args: any[]) => Promise<any> {
+      return async (...args: any[]): Promise<any> => {
+        this.ignoreNextEditorChange = true;
+        try {
+          return await task.apply(this, args);
+        } finally {
+          this.ignoreNextEditorChange = false;
+        }
+      };
+    },
+
     /** Sets editor content without triggering the 'change' listener */
     setEditorValue(value: string) {
       if (!this.editor) return;
-      this.ignoreNextEditorChange = true;
-      this.editor.setValue(value, -1); // -1 moves cursor to start, preserve below
+      // setValue is implemented within Ace.js as an remove + insert operation.
+      // The first operation will trigger a local update which will be programmatically ignored
+      // in our handleLocalDelta handler, since this.ignoreNextEditorChange = true. However,
+      // the subsequent insert operation will not be programatiicaly blocked 
+      // (this.ignoreNextEditorChange is reset to false by the handleLocalDelta handler once its
+      // execution is done), this triggeres a local delta which messes up our logic. We 
+      // need a way to block both updates
+      this.withNoLocalUpdate(() => {
+        this.editor!.setValue(value, -1);
+      })();
+
       // Reset OT state on programmatic changes:
       this.syncedDoc = value;
       this.virtualDoc = value;
@@ -149,7 +170,6 @@ function editorApp() {
       console.log("Delta:", delta.start, delta.end, delta.action, delta.lines);
       if (this.ignoreNextEditorChange) {
         console.log("Ignoring...")
-        this.ignoreNextEditorChange = false;
         return;
       }
 
@@ -213,7 +233,7 @@ function editorApp() {
     initSocketIO() {
       console.log("Initializing websocket connection...");
       // this.socket = io(this.serverUrl);
-      this.socket = io({transports: ['websocket'], upgrade: false});
+      this.socket = io({ transports: ['websocket'], upgrade: false });
 
       this.socket.on("connect", () => {
         this.isConnected = true;
@@ -342,7 +362,7 @@ function editorApp() {
 
         // 3. Apply the (potentially transformed) serverOp to the current editor content
         // We need to consider the *current* editor state which might include unpushed changes.
-        let currentEditorContent = this.editor.getValue();
+        let currentEditorContent = this.editor?.getValue();
         let editorOpToApply = serverOp; // Start with the op transformed against outstandingOp
 
         // If we are in 'dirty' state, there are local changes *not* included in outstandingOp.
@@ -354,7 +374,7 @@ function editorApp() {
             // The order matters: transform(serverOp, localChangesOp)
             // We only care about the transformed server op to apply to the editor.
             [editorOpToApply, this.bufferedOp] = TextOperation.transform(serverOp, this.bufferedOp);
-            this.addLog(`Transformed server op against dirty local changes.`);
+            this.addLog(`Transformed server op against dirty local changes. Resulting op: ${editorOpToApply}`);
           } catch (e: any) {
             this.addLog(`CRITICAL ERROR during transform (dirty): ${e.message}. Forcing pull.`);
             this.pullChanges();
@@ -364,9 +384,14 @@ function editorApp() {
 
         // 4. Apply the final transformed server operation to the editor
         try {
+          console.debug(`Attempting to apply op: ${editorOpToApply.toString()}`)
           const newEditorContent = editorOpToApply.apply(currentEditorContent);
+          // Importantly, we don't want to trigger a local editor update, which would modify
+          // this.bufferedOp again.. setEditorValue() takes care of that by setting
+          // this.ignoreNextEditorChange = true and toggling it back to false after the change
+          // has been committed
           this.setEditorValue(newEditorContent);
-          this.addLog(`Applied transformed server op to editor.`);
+          this.addLog(`Applied transformed server op (${editorOpToApply.toString()}) to editor.`);
         } catch (e: any) {
           this.addLog(`CRITICAL ERROR applying transformed server op to editor: ${e.message}. Forcing pull.`);
           this.pullChanges();
@@ -460,7 +485,7 @@ function editorApp() {
           this.addLog(`CRITICAL ERROR applying history: ${error.message}. Requesting full reset.`);
           this.state = 'initializing';
           this.editor?.setReadOnly(true);
-          this.editor?.setValue("Error applying history. Reconnecting...");
+          this.setEditorValue("Error applying history. Reconnecting...");
           // Force reconnect to get fresh initial state
           this.socket?.disconnect().connect();
         } finally {

@@ -3036,11 +3036,22 @@ function editorApp() {
         this.log.pop();
       }
     },
+    withNoLocalUpdate(task) {
+      return async (...args) => {
+        this.ignoreNextEditorChange = true;
+        try {
+          return await task.apply(this, args);
+        } finally {
+          this.ignoreNextEditorChange = false;
+        }
+      };
+    },
     setEditorValue(value2) {
       if (!this.editor)
         return;
-      this.ignoreNextEditorChange = true;
-      this.editor.setValue(value2, -1);
+      this.withNoLocalUpdate(() => {
+        this.editor.setValue(value2, -1);
+      })();
       this.syncedDoc = value2;
       this.virtualDoc = value2;
       this.bufferedOp = null;
@@ -3049,7 +3060,6 @@ function editorApp() {
       console.log("Delta:", delta.start, delta.end, delta.action, delta.lines);
       if (this.ignoreNextEditorChange) {
         console.log("Ignoring...");
-        this.ignoreNextEditorChange = false;
         return;
       }
       const op = convertAceDeltaToOp.call(this, delta);
@@ -3172,12 +3182,12 @@ function editorApp() {
           this.pullChanges();
           return;
         }
-        let currentEditorContent = this.editor.getValue();
+        let currentEditorContent = this.editor?.getValue();
         let editorOpToApply = serverOp;
         if (this.state === "dirty" && this.bufferedOp) {
           try {
             [editorOpToApply, this.bufferedOp] = TextOperation.transform(serverOp, this.bufferedOp);
-            this.addLog(`Transformed server op against dirty local changes.`);
+            this.addLog(`Transformed server op against dirty local changes. Resulting op: ${editorOpToApply}`);
           } catch (e) {
             this.addLog(`CRITICAL ERROR during transform (dirty): ${e.message}. Forcing pull.`);
             this.pullChanges();
@@ -3185,9 +3195,10 @@ function editorApp() {
           }
         }
         try {
+          console.debug(`Attempting to apply op: ${editorOpToApply.toString()}`);
           const newEditorContent = editorOpToApply.apply(currentEditorContent);
           this.setEditorValue(newEditorContent);
-          this.addLog(`Applied transformed server op to editor.`);
+          this.addLog(`Applied transformed server op (${editorOpToApply.toString()}) to editor.`);
         } catch (e) {
           this.addLog(`CRITICAL ERROR applying transformed server op to editor: ${e.message}. Forcing pull.`);
           this.pullChanges();
@@ -3246,7 +3257,7 @@ function editorApp() {
           this.addLog(`CRITICAL ERROR applying history: ${error.message}. Requesting full reset.`);
           this.state = "initializing";
           this.editor?.setReadOnly(true);
-          this.editor?.setValue("Error applying history. Reconnecting...");
+          this.setEditorValue("Error applying history. Reconnecting...");
           this.socket?.disconnect().connect();
         } finally {
           if (this.state === "awaitingPull") {
