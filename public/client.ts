@@ -118,7 +118,6 @@ function editorApp() {
     canPull(): boolean {
       return (
         this.isConnected &&
-        this.mode === "Manual" &&
         this.state !== "awaitingPush" &&
         this.state !== "awaitingPull"
       );
@@ -200,8 +199,19 @@ function editorApp() {
         this.virtualDoc = this.editor?.getValue() || "";
         this.bufferedOp = null;
       }
-      // Mark that we have unsent local changes.
-      this.state = "dirty";
+      // Mark that we have unsent local changes. Note that if we pushed local changes before,
+      // and are yet to receive the ACK back from the server, we will be in the "awaitingPush"
+      // state, and we shouldn't overwrite it here!
+      if (this.state !== "initializing") {
+        if (this.editor.getValue() !== this.syncedDoc && this.state !== 'awaitingPush') {
+          this.state = "dirty";
+          console.log("Editor changed, state -> dirty");
+        } else if (this.editor.getValue() === this.syncedDoc && this.state === 'dirty') {
+          // Changed back to synced state manually
+          this.state = 'synchronized';
+          console.log("Editor changed back to synced state");
+        }
+      }
     },
 
     /** Initialize Ace Editor */
@@ -575,7 +585,7 @@ function editorApp() {
         this.bufferedOp.isNoop() ||
         !(this.state === "synchronized" || this.state === "dirty")
       ) {
-        // console.debug("Auto-push conditions not met."); // Optional debug log
+        console.debug("Auto-push conditions not met."); // Optional debug log
         return;
       }
 
@@ -627,10 +637,10 @@ function editorApp() {
       // --- Atomic Section (Manual) ---
       const opToSend = this.bufferedOp;
       if (opToSend.isNoop()) {
-          this.bufferedOp = null;
-          this.addLog("No effective changes to push.");
-          if (this.state === 'dirty') this.state = 'synchronized';
-          return;
+        this.bufferedOp = null;
+        this.addLog("No effective changes to push.");
+        if (this.state === 'dirty') this.state = 'synchronized';
+        return;
       }
       this.outstandingOp = opToSend;
       this.bufferedOp = null;
@@ -676,8 +686,8 @@ function editorApp() {
       // Alpine doesn't have a built-in destroy hook easily accessible here,
       // but window unload is a decent proxy for cleanup.
       window.addEventListener('beforeunload', () => {
-          this.stopAutoPushTimer();
-          this.socket?.disconnect();
+        this.stopAutoPushTimer();
+        this.socket?.disconnect();
       });
     },
   };
