@@ -195,7 +195,8 @@ app.ready().then(() => {
 
 // --- Start the Fastify Server ---
 const PORT = process.env.PORT || 3000;
-app.listen({ port: Number(PORT) }, (err, address) => {
+const HOST = process.env.HOST || "0.0.0.0";
+app.listen({ port: Number(PORT), host: String(HOST)}, (err, address) => {
   if (err) {
     console.error(err);
     process.exit(1);

@@ -157,7 +157,7 @@ function editorApp() {
       })();
 
       // Reset OT state on programmatic changes:
-      this.syncedDoc = value;
+      // this.syncedDoc = value;
       this.virtualDoc = value;
     },
 
