@@ -159,7 +159,6 @@ function editorApp() {
       // Reset OT state on programmatic changes:
       this.syncedDoc = value;
       this.virtualDoc = value;
-      this.bufferedOp = null;
     },
 
     /** Process a local Ace delta event by converting it to a TextOperation,
