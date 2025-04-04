@@ -101,6 +101,10 @@ function editorApp() {
     bufferedOp: null as TextOperation | null,
     ignoreNextEditorChange: false, // Flag to prevent feedback loops when setting editor value programmatically
 
+    // Automatic Mode State management
+    autoPushIntervalId: null as number | null, // Stores the interval ID
+    autoPushIntervalMs: 100, // Interval in milliseconds (e.g., 2 seconds)
+
     // --- Computed Properties / Helpers ---
     canPush(): boolean {
       return (
@@ -153,6 +157,10 @@ function editorApp() {
       // execution is done), this triggeres a local delta which messes up our logic. We 
       // need a way to block both updates
       this.withNoLocalUpdate(() => {
+        // TODO: In the future, once we've verified robustness of the OT
+        // implementation, we might want to consider storing and then restoring
+        // the cursor position here.
+        // const cursorPos = this.editor.getCursorPosition();
         this.editor!.setValue(value, -1);
       })();
 
@@ -250,6 +258,7 @@ function editorApp() {
         this.localRevision = -1;
         this.outstandingOp = null;
         this.editor?.setReadOnly(true);
+        this.stopAutoPushTimer(); // Stop auto-push on disconnect
       });
 
       this.socket.on("connect_error", (err) => {
@@ -261,6 +270,7 @@ function editorApp() {
         this.localRevision = -1;
         this.outstandingOp = null;
         this.editor?.setReadOnly(true);
+        this.stopAutoPushTimer();
       });
 
       // --- Server Message Handlers ---
@@ -278,6 +288,7 @@ function editorApp() {
         this.state = "synchronized";
         this.outstandingOp = null;
         this.bufferedOp = null;
+        this.startAutoPushTimer();
       });
 
       this.socket.on("ack", (msg: ServerAckMsg) => {
@@ -497,6 +508,8 @@ function editorApp() {
               this.state = 'awaitingPush';
             }
           }
+          // Restart timer if we are in Automatic mode and connected
+          this.startAutoPushTimer(); // Safe to call even if already running or not in auto mode
         }
       });
 
@@ -511,35 +524,85 @@ function editorApp() {
       });
     },
 
-    /** Handle mode change */
     handleModeChange() {
       this.addLog(`Mode changed to ${this.mode}`);
       if (this.mode === "Automatic") {
-        this.addLog("Automatic mode is not yet implemented.");
-        // Reset to Manual for now
-        setTimeout(() => { this.mode = "Manual"; }, 0);
+        this.startAutoPushTimer();
+        // Immediately attempt a push if there are pending changes
+        this.autoPushTask();
+      } else {
+        this.stopAutoPushTimer();
       }
     },
 
-    /** Push local changes to the server */
-    pushChanges() {
-      if (!this.canPush() || !this.socket) return;
+    /** Start the automatic push timer */
+    startAutoPushTimer() {
+      if (this.autoPushIntervalId !== null) {
+        // Timer already running
+        return;
+      }
+      if (this.mode === "Automatic" && this.isConnected && this.state !== 'initializing') {
+        this.addLog(
+          `Starting automatic push timer (${this.autoPushIntervalMs}ms)`,
+        );
+        this.autoPushIntervalId = setInterval(
+          this.autoPushTask.bind(this),
+          this.autoPushIntervalMs,
+        );
+      }
+    },
 
-      const opToSend = this.bufferedOp!;
-      if (opToSend.isNoop()) {
-        this.bufferedOp = null;
-        this.addLog("No changes to push.");
-        this.state = "synchronized";
+    /** Stop the automatic push timer */
+    stopAutoPushTimer() {
+      if (this.autoPushIntervalId !== null) {
+        this.addLog("Stopping automatic push timer.");
+        clearInterval(this.autoPushIntervalId);
+        this.autoPushIntervalId = null;
+      }
+    },
+
+    /** Task run periodically by the timer in Automatic mode */
+    autoPushTask() {
+      // Conditions for auto-push:
+      // 1. Mode must be Automatic
+      // 2. Must be connected
+      // 3. Must have buffered changes (not null and not no-op)
+      // 4. Must be in a state ready to send (synchronized or dirty)
+      if (
+        this.mode !== "Automatic" ||
+        !this.isConnected ||
+        !this.bufferedOp ||
+        this.bufferedOp.isNoop() ||
+        !(this.state === "synchronized" || this.state === "dirty")
+      ) {
+        // console.debug("Auto-push conditions not met."); // Optional debug log
+        return;
+      }
+
+      // --- Atomic Section Start ---
+      // This block runs synchronously within the timer callback.
+      // No other event handler (like handleLocalDelta) can interrupt it.
+      this.addLog("Auto-push triggered.");
+      const opToSend = this.bufferedOp;
+      this.outstandingOp = opToSend;
+      this.bufferedOp = null; // Clear buffer *after* copying
+      this.state = "awaitingPush";
+      // --- Atomic Section End ---
+
+      // Initiate the asynchronous network request
+      this.pushChangesInternal(opToSend);
+    },
+
+    /** Internal push logic used by both manual and automatic modes */
+    pushChangesInternal(opToSend: TextOperation) {
+      if (!this.socket) {  // Should not happen if isConnected is true
+        console.error("Socket not initialized. Cannot push changes.");
         return;
       }
 
       this.addLog(
         `Pushing changes based on server revision ${this.serverRevision}. Op: ${opToSend.toString()}`,
       );
-
-      this.outstandingOp = opToSend;
-      this.bufferedOp = null; // Reset after sending
-      this.state = "awaitingPush";
 
       const pushMsg: ClientPushMsg = {
         revision: this.serverRevision,
@@ -548,16 +611,55 @@ function editorApp() {
       this.socket.emit("push", pushMsg);
     },
 
+    /** Push local changes to the server (Manual Mode Trigger) */
+    pushChanges() {
+      // This function is the *trigger* for manual pushes.
+      // It relies on canPush for UI enablement.
+      if (!this.canPush() || !this.socket || !this.bufferedOp) {
+        this.addLog("Manual push conditions not met or no changes to push.");
+        if (this.bufferedOp && this.bufferedOp.isNoop()) {
+          this.bufferedOp = null; // Clear no-op buffer
+          if (this.state === 'dirty') this.state = 'synchronized';
+        }
+        return;
+      }
+
+      // --- Atomic Section (Manual) ---
+      const opToSend = this.bufferedOp;
+      if (opToSend.isNoop()) {
+          this.bufferedOp = null;
+          this.addLog("No effective changes to push.");
+          if (this.state === 'dirty') this.state = 'synchronized';
+          return;
+      }
+      this.outstandingOp = opToSend;
+      this.bufferedOp = null;
+      this.state = "awaitingPush";
+      // --- Atomic Section End (Manual) ---
+
+      this.pushChangesInternal(opToSend);
+    },
+
     /** Pull latest changes from the server */
     pullChanges() {
       if (!this.canPull() || !this.socket) return;
 
       this.addLog(`Pulling changes since server revision ${this.serverRevision}`);
+
+      // Stop auto-pushes temporarily while pulling history
+      const wasAuto = this.mode === 'Automatic';
+      if (wasAuto) this.stopAutoPushTimer();
+
       this.state = "awaitingPull";
       const pullMsg: ClientPullMsg = {
         revision: this.serverRevision,
       };
       this.socket.emit("pull", pullMsg);
+
+      // We need to restart the timer *after* the history is processed and state settles.
+      // This is handled within the 'history' event handler's final state check.
+      // We might need a flag or check the mode again in the history handler's finally block.
+      // Let's modify the history handler slightly.
     },
 
     // --- Init ---
@@ -566,6 +668,17 @@ function editorApp() {
       this.initEditor();
       this.initSocketIO();
       this.addLog("Client initialized. Waiting for connection...");
+
+      // Ensure timer is stopped initially
+      this.stopAutoPushTimer();
+
+      // Add cleanup for when the component is destroyed (e.g., page navigation)
+      // Alpine doesn't have a built-in destroy hook easily accessible here,
+      // but window unload is a decent proxy for cleanup.
+      window.addEventListener('beforeunload', () => {
+          this.stopAutoPushTimer();
+          this.socket?.disconnect();
+      });
     },
   };
 }

@@ -3023,6 +3023,8 @@ function editorApp() {
     outstandingOp: null,
     bufferedOp: null,
     ignoreNextEditorChange: false,
+    autoPushIntervalId: null,
+    autoPushIntervalMs: 100,
     canPush() {
       return this.isConnected && this.mode === "Manual" && this.state !== "awaitingPush" && this.state !== "awaitingPull" && this.bufferedOp !== null;
     },
@@ -3102,6 +3104,7 @@ function editorApp() {
         this.localRevision = -1;
         this.outstandingOp = null;
         this.editor?.setReadOnly(true);
+        this.stopAutoPushTimer();
       });
       this.socket.on("connect_error", (err) => {
         this.isConnected = false;
@@ -3112,6 +3115,7 @@ function editorApp() {
         this.localRevision = -1;
         this.outstandingOp = null;
         this.editor?.setReadOnly(true);
+        this.stopAutoPushTimer();
       });
       this.socket.on("initial_state", (msg) => {
         this.addLog(`Received initial state. Revision: ${msg.revision}. Doc length: ${msg.doc.length}`);
@@ -3124,6 +3128,7 @@ function editorApp() {
         this.state = "synchronized";
         this.outstandingOp = null;
         this.bufferedOp = null;
+        this.startAutoPushTimer();
       });
       this.socket.on("ack", (msg) => {
         if (this.state !== "awaitingPush") {
@@ -3268,6 +3273,7 @@ function editorApp() {
               this.state = "awaitingPush";
             }
           }
+          this.startAutoPushTimer();
         }
       });
       this.socket.on("error", (msg) => {
@@ -3282,36 +3288,81 @@ function editorApp() {
     handleModeChange() {
       this.addLog(`Mode changed to ${this.mode}`);
       if (this.mode === "Automatic") {
-        this.addLog("Automatic mode is not yet implemented.");
-        setTimeout(() => {
-          this.mode = "Manual";
-        }, 0);
+        this.startAutoPushTimer();
+        this.autoPushTask();
+      } else {
+        this.stopAutoPushTimer();
       }
     },
-    pushChanges() {
-      if (!this.canPush() || !this.socket)
-        return;
-      const opToSend = this.bufferedOp;
-      if (opToSend.isNoop()) {
-        this.bufferedOp = null;
-        this.addLog("No changes to push.");
-        this.state = "synchronized";
+    startAutoPushTimer() {
+      if (this.autoPushIntervalId !== null) {
         return;
       }
-      this.addLog(`Pushing changes based on server revision ${this.serverRevision}. Op: ${opToSend.toString()}`);
+      if (this.mode === "Automatic" && this.isConnected && this.state !== "initializing") {
+        this.addLog(`Starting automatic push timer (${this.autoPushIntervalMs}ms)`);
+        this.autoPushIntervalId = setInterval(this.autoPushTask.bind(this), this.autoPushIntervalMs);
+      }
+    },
+    stopAutoPushTimer() {
+      if (this.autoPushIntervalId !== null) {
+        this.addLog("Stopping automatic push timer.");
+        clearInterval(this.autoPushIntervalId);
+        this.autoPushIntervalId = null;
+      }
+    },
+    autoPushTask() {
+      if (this.mode !== "Automatic" || !this.isConnected || !this.bufferedOp || this.bufferedOp.isNoop() || !(this.state === "synchronized" || this.state === "dirty")) {
+        return;
+      }
+      this.addLog("Auto-push triggered.");
+      const opToSend = this.bufferedOp;
       this.outstandingOp = opToSend;
       this.bufferedOp = null;
       this.state = "awaitingPush";
+      this.pushChangesInternal(opToSend);
+    },
+    pushChangesInternal(opToSend) {
+      if (!this.socket) {
+        console.error("Socket not initialized. Cannot push changes.");
+        return;
+      }
+      this.addLog(`Pushing changes based on server revision ${this.serverRevision}. Op: ${opToSend.toString()}`);
       const pushMsg = {
         revision: this.serverRevision,
         op: opToSend.toJSON()
       };
       this.socket.emit("push", pushMsg);
     },
+    pushChanges() {
+      if (!this.canPush() || !this.socket || !this.bufferedOp) {
+        this.addLog("Manual push conditions not met or no changes to push.");
+        if (this.bufferedOp && this.bufferedOp.isNoop()) {
+          this.bufferedOp = null;
+          if (this.state === "dirty")
+            this.state = "synchronized";
+        }
+        return;
+      }
+      const opToSend = this.bufferedOp;
+      if (opToSend.isNoop()) {
+        this.bufferedOp = null;
+        this.addLog("No effective changes to push.");
+        if (this.state === "dirty")
+          this.state = "synchronized";
+        return;
+      }
+      this.outstandingOp = opToSend;
+      this.bufferedOp = null;
+      this.state = "awaitingPush";
+      this.pushChangesInternal(opToSend);
+    },
     pullChanges() {
       if (!this.canPull() || !this.socket)
         return;
       this.addLog(`Pulling changes since server revision ${this.serverRevision}`);
+      const wasAuto = this.mode === "Automatic";
+      if (wasAuto)
+        this.stopAutoPushTimer();
       this.state = "awaitingPull";
       const pullMsg = {
         revision: this.serverRevision
@@ -3323,6 +3374,11 @@ function editorApp() {
       this.initEditor();
       this.initSocketIO();
       this.addLog("Client initialized. Waiting for connection...");
+      this.stopAutoPushTimer();
+      window.addEventListener("beforeunload", () => {
+        this.stopAutoPushTimer();
+        this.socket?.disconnect();
+      });
     }
   };
 }
