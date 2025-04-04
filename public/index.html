@@ -33,7 +33,7 @@
       class="container"
       x-data="editorApp"
     >
-      <h1>Collaborative Markdown Editor (OT Prototype)</h1>
+      <h2>Collaborative Markdown Editor</h2>
 
       <div class="status-bar">
         <span>Status: <strong x-text="statusText">Connecting...</strong></span>
@@ -46,6 +46,18 @@
         </span>
         <span>Server Rev: <strong x-text="serverRevision">?</strong></span>
         <span>Client Rev: <strong x-text="localRevision">?</strong></span>
+      </div>
+
+      <div class="controls">
+        <button @click="pushChanges" :disabled="!canPush()">
+          Push Changes &uarr;
+        </button>
+        <button @click="pullChanges" :disabled="!canPull()">
+          Pull Changes &darr;
+        </button>
+        <span x-show="state === 'dirty'" class="state-indicator">Unpushed changes</span>
+        <span x-show="state === 'awaitingPush'" class="state-indicator">Pushing...</span>
+         <span x-show="state === 'awaitingPull'" class="state-indicator">Pulling...</span>
       </div>
 
       <div id="side-by-side">
@@ -71,17 +83,6 @@
                 <pre x-text="syncedDoc"></pre>
             </div>
         </div>
-      </div>
-      <div class="controls">
-        <button @click="pushChanges" :disabled="!canPush()">
-          Push Changes &uarr;
-        </button>
-        <button @click="pullChanges" :disabled="!canPull()">
-          Pull Changes &darr;
-        </button>
-        <span x-show="state === 'dirty'" class="state-indicator">Unpushed changes</span>
-        <span x-show="state === 'awaitingPush'" class="state-indicator">Pushing...</span>
-         <span x-show="state === 'awaitingPull'" class="state-indicator">Pulling...</span>
       </div>
       <div class="log-container">
         <h2>Operation Log</h2>

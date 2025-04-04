@@ -3295,6 +3295,7 @@ function editorApp() {
         return;
       const opToSend = this.bufferedOp;
       if (opToSend.isNoop()) {
+        this.bufferedOp = null;
         this.addLog("No changes to push.");
         this.state = "synchronized";
         return;
