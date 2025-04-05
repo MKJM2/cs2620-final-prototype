@@ -32,21 +32,20 @@ const operationHistory: TextOperation[] = [];
 const app = fastify();
 
 // 1. Register CORS so that /socket.io polling requests have proper headers.
-app.register(fastifyCors, { origin: "*" });
+await app.register(fastifyCors, { origin: "*" });
 
-// 4. Register Socket.IO.
-// Note: Its default endpoint is '/socket.io'
-app.register(fastifyIO, {
+// 2. Register Socket.IO. Note: Its default endpoint is '/socket.io'
+await app.register(fastifyIO, {
   cors: {
     origin: "*",
     methods: ["GET", "POST"],
   },
 });
 
-// 2. Register static asset serving for your public assets under '/public'.
+// 3. Register static asset serving for your public assets under '/public'.
 // This prevents a catch-all route serving every path (like /socket.io).
 const publicDir = path.resolve(__dirname, "../public");
-app.register(fastifyStatic, {
+await app.register(fastifyStatic, {
   root: publicDir,
   prefix: "/public", // e.g. /public/client.js, /public/style.css, etc.
 });

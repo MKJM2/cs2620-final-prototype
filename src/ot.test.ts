@@ -360,8 +360,10 @@ describe("Extended TextOperation Tests", () => {
     expect(op.targetLength).toBe(5);
 
     const badOps1 = [...ops, { insert: 'x' }];
+    // @ts-expect-error - Testing invalid input type
     expect(() => TextOperation.fromJSON(badOps1)).toThrow();
     const badOps2 = [...ops, null];
+    // @ts-expect-error - Testing invalid input type
     expect(() => TextOperation.fromJSON(badOps2)).toThrow();
   });
 

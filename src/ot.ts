@@ -172,8 +172,8 @@ export class TextOperation {
    */
   equals(other: TextOperation): boolean {
     if ((this.baseLength !== other.baseLength) ||
-        (this.targetLength !== other.targetLength) ||
-        (this.ops.length !== other.ops.length)) {
+      (this.targetLength !== other.targetLength) ||
+      (this.ops.length !== other.ops.length)) {
       return false;
     }
     for (let i = 0; i < this.ops.length; ++i) {
@@ -314,16 +314,16 @@ export class TextOperation {
     const ops1 = this.ops.slice();
     const ops2 = other.ops.slice();
 
-    let op1 = ops1.shift();
-    let op2 = ops2.shift();
+    let op1: OperationComponent | undefined = ops1.shift();
+    let op2: OperationComponent | undefined = ops2.shift();
 
     while (op1 !== undefined || op2 !== undefined) {
-      if (isDelete(op1)) {
+      if (op1 !== undefined && isDelete(op1)) {
         composed.delete(-op1);
         op1 = ops1.shift();
         continue;
       }
-      if (isInsert(op2)) {
+      if (op2 !== undefined && isInsert(op2)) {
         composed.insert(op2);
         op2 = ops2.shift();
         continue;
@@ -341,9 +341,10 @@ export class TextOperation {
       }
 
       if (isRetain(op1) && isRetain(op2)) {
-        const minLen = Math.min(op1, op2);
+        const minLen: number = Math.min(op1, op2);
         composed.retain(minLen);
         if (op1 > op2) {
+          // @ts-expect-error - op1 is guaranteed to be a 'number' here by isRetain(op1)==true
           op1 -= op2;
           op2 = ops2.shift();
         } else if (op1 < op2) {
@@ -379,9 +380,12 @@ export class TextOperation {
           op2 = ops2.shift();
         }
       } else if (isRetain(op1) && isDelete(op2)) {
+        // At this point, isRetain(op1) means op1 is number > 0
+        // And isDelete(op2) means op2 is number < 0
         const minLen = Math.min(op1, -op2);
         composed.delete(minLen);
         if (op1 > -op2) {
+          // @ts-expect-error - op1 is guaranteed to be a 'number' here by isRetain(op1)==true
           op1 -= -op2; // op1 becomes smaller positive
           op2 = ops2.shift();
         } else if (op1 < -op2) {
@@ -430,13 +434,13 @@ export class TextOperation {
     while (currentOp1 !== undefined || currentOp2 !== undefined) {
       // Handle inserts: Inserts are effectively retained by the other operation.
       // Priority is given to op1's insert if both insert at the same position.
-      if (isInsert(currentOp1)) {
+      if (currentOp1 && isInsert(currentOp1)) {
         op1Prime.insert(currentOp1);
         op2Prime.retain(currentOp1.length);
         currentOp1 = ops1.shift();
         continue;
       }
-      if (isInsert(currentOp2)) {
+      if (currentOp2 && isInsert(currentOp2)) {
         op1Prime.retain(currentOp2.length);
         op2Prime.insert(currentOp2);
         currentOp2 = ops2.shift();
