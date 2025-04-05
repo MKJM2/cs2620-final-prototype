@@ -103,7 +103,7 @@ function editorApp() {
 
     // Automatic Mode State management
     autoPushIntervalId: null as number | null, // Stores the interval ID
-    autoPushIntervalMs: 100, // Interval in milliseconds (e.g., 2 seconds)
+    autoPushIntervalMs: 200, // Interval in milliseconds
 
     // --- Computed Properties / Helpers ---
     canPush(): boolean {
