@@ -2,7 +2,10 @@
   "compilerOptions": {
     "target": "ESNext", // Target modern JS features
     "module": "ESNext", // Use ES modules
-    "lib": ["ESNext", "DOM"], // Include DOM types for client-side code if sharing types
+    "lib": [
+      "ESNext",
+      "DOM"
+    ], // Include DOM types for client-side code if sharing types
     "moduleResolution": "bundler", // Use modern module resolution
     "strict": true, // Enable strict type checking
     "esModuleInterop": true, // Allow default imports from commonjs modules
@@ -10,7 +13,11 @@
     "forceConsistentCasingInFileNames": true, // Ensure consistent file casing
     "outDir": "./dist", // Output directory for compiled server code (if needed)
     "rootDir": "./", // Specify root directory
-    "types": ["bun"], // Include Bun types
+    "types": [
+      "bun",
+      "ace",
+      "socket.io"
+    ], // Include Bun types
     "allowJs": true, // Allow JavaScript files to be compiled (useful for gradual migration or external libs)
     "checkJs": false, // Do not type-check JS files by default
     "declaration": true, // Generate corresponding '.d.ts' file
@@ -18,6 +25,12 @@
     "noEmit": true, // Prevent TypeScript from emitting files; Bun handles transpilation. Set to false if using tsc directly.
     "resolveJsonModule": true // Allows importing JSON files
   },
-  "include": ["src/**/*.ts", "public/**/*.ts"], // Specify files to include
-  "exclude": ["node_modules", "dist"] // Specify files/directories to exclude
+  "include": [
+    "src/**/*.ts",
+    "public/**/*.ts"
+  ], // Specify files to include
+  "exclude": [
+    "node_modules",
+    "dist"
+  ] // Specify files/directories to exclude
 }

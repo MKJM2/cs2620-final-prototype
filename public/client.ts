@@ -1,5 +1,4 @@
 // public/client.ts
-import type { Ace } from "ace";
 import { io, Socket } from "socket.io-client";
 import { TextOperation } from "../src/ot"; // Adjust path
 import type {
@@ -12,7 +11,7 @@ import type {
 } from "../src/types"; // Adjust path
 
 // Make ace available globally if needed, or import types if using modules
-declare var ace: Ace | null;
+declare var ace: AceAjax.Ace | null;
 
 // Declare Alpine as globally available (since it's loaded from CDN)
 declare var Alpine: any;
@@ -35,7 +34,7 @@ function positionToIndex(lines: string[], pos: { row: number; column: number }) 
  * We assume that `this.virtualDoc` (a property of the client)
  * holds the document text before the change.
  */
-function convertAceDeltaToOp(this: any, delta: any): TextOperation {
+function convertAceDeltaToOp(this: any, delta: AceAjax.Delta): TextOperation {
   // Use virtualDoc (the last synced plus buffered changes) as base
   const text: string = this.virtualDoc;
   const lines: string[] = text.split("\n");
@@ -69,7 +68,7 @@ function convertAceDeltaToOp(this: any, delta: any): TextOperation {
 function editorApp() {
   return {
     // --- State ---
-    editor: null as Ace.Editor | null, // Ace editor instance
+    editor: null as AceAjax.Editor | null, // Ace editor instance
     socket: null as Socket | null,
     serverUrl: "http://localhost:3000", // Default server URL
     statusText: "Connecting...",
@@ -172,7 +171,7 @@ function editorApp() {
      * composing it with any unpushed buffered changes, and updating the local
      * virtual document.
      */
-    handleLocalDelta(delta: Ace.Delta) {
+    handleLocalDelta(delta: AceAjax.Delta) {
       console.log("Delta:", delta.start, delta.end, delta.action, delta.lines);
       if (this.ignoreNextEditorChange) {
         console.log("Ignoring...")
@@ -203,10 +202,10 @@ function editorApp() {
       // and are yet to receive the ACK back from the server, we will be in the "awaitingPush"
       // state, and we shouldn't overwrite it here!
       if (this.state !== "initializing") {
-        if (this.editor.getValue() !== this.syncedDoc && this.state !== 'awaitingPush') {
+        if (this.editor!.getValue() !== this.syncedDoc && this.state !== 'awaitingPush') {
           this.state = "dirty";
           console.log("Editor changed, state -> dirty");
-        } else if (this.editor.getValue() === this.syncedDoc && this.state === 'dirty') {
+        } else if (this.editor!.getValue() === this.syncedDoc && this.state === 'dirty') {
           // Changed back to synced state manually
           this.state = 'synchronized';
           console.log("Editor changed back to synced state");
@@ -216,12 +215,12 @@ function editorApp() {
 
     /** Initialize Ace Editor */
     initEditor() {
-      this.editor = ace.edit("editor");
+      this.editor = ace!.edit("editor");  // Ace will be loaded via CDN, and not bundled
       this.editor.setTheme("ace/theme/monokai");
       this.editor.session.setMode("ace/mode/markdown");
       this.editor.setReadOnly(true); // Read-only until connected and state received
 
-      this.editor.session.on("change", (delta: Ace.Delta) => {
+      this.editor.session.on("change", (delta: AceAjax.Delta) => {
         this.handleLocalDelta(delta);
         /*
         if (this.ignoreNextEditorChange) {
@@ -382,7 +381,7 @@ function editorApp() {
 
         // 3. Apply the (potentially transformed) serverOp to the current editor content
         // We need to consider the *current* editor state which might include unpushed changes.
-        let currentEditorContent = this.editor?.getValue();
+        let currentEditorContent = this.editor!.getValue();
         let editorOpToApply = serverOp; // Start with the op transformed against outstandingOp
 
         // If we are in 'dirty' state, there are local changes *not* included in outstandingOp.
@@ -456,7 +455,7 @@ function editorApp() {
           // Attempt to apply anyway, but this indicates potential issues.
         }
 
-        let currentEditorContent = this.editor.getValue();
+        let currentEditorContent = this.editor!.getValue();
 
         try {
           for (const opJson of msg.ops) {
@@ -477,7 +476,7 @@ function editorApp() {
             // Apply transformed op to editor content (considering dirty state implicitly)
             // Similar logic as in 'update', but repeated for each historical op.
             let editorOpToApply = serverOp;
-            if ((this.state === 'dirty' || this.editor.getValue() !== this.syncedDoc) && this.bufferedOp) { // Check actual content diff
+            if ((this.state === 'dirty' || this.editor?.getValue() !== this.syncedDoc) && this.bufferedOp) { // Check actual content diff
               [editorOpToApply, this.bufferedOp] = TextOperation.transform(serverOp, this.bufferedOp);
             }
 
@@ -511,7 +510,7 @@ function editorApp() {
         } finally {
           if (this.state === 'awaitingPull') {
             // If we were awaiting pull, transition based on outcome
-            if (!this.outstandingOp && this.state !== 'initializing') {
+            if (!this.outstandingOp) {
               if (this.editor?.getValue() === this.syncedDoc) this.state = 'synchronized';
               else this.state = 'dirty';
             } else if (this.outstandingOp) {
@@ -555,7 +554,7 @@ function editorApp() {
         this.addLog(
           `Starting automatic push timer (${this.autoPushIntervalMs}ms)`,
         );
-        this.autoPushIntervalId = setInterval(
+        this.autoPushIntervalId = window.setInterval(
           this.autoPushTask.bind(this),
           this.autoPushIntervalMs,
         );
@@ -566,7 +565,7 @@ function editorApp() {
     stopAutoPushTimer() {
       if (this.autoPushIntervalId !== null) {
         this.addLog("Stopping automatic push timer.");
-        clearInterval(this.autoPushIntervalId);
+        window.clearInterval(this.autoPushIntervalId);
         this.autoPushIntervalId = null;
       }
     },

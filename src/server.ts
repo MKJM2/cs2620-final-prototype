@@ -14,6 +14,7 @@ import type {
   ServerHistoryMsg,
   ServerInitialStateMsg,
 } from "./types";
+import { Socket } from "socket.io";
 
 // Get __dirname for ESM
 const __filename = fileURLToPath(import.meta.url);
@@ -57,7 +58,7 @@ app.get("/", (_req, reply) => {
 
 
 app.ready().then(() => {
-  app.io.on("connection", (socket) => {
+  app.io.on("connection", (socket: Socket) => {
     console.log(`Client connected: ${socket.id}`);
 
     // 4a. Send the initial document state.
@@ -196,7 +197,7 @@ app.ready().then(() => {
 // --- Start the Fastify Server ---
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || "0.0.0.0";
-app.listen({ port: Number(PORT), host: String(HOST)}, (err, address) => {
+app.listen({ port: Number(PORT), host: String(HOST) }, (err, address) => {
   if (err) {
     console.error(err);
     process.exit(1);

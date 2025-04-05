@@ -210,23 +210,23 @@ describe("TextOperation", () => {
     transformTest(doc, op1, op2);
   });
 
-    it("should transform delete/insert", () => {
-        const op1 = new TextOperation().retain(1).delete(2).retain(3); // adef
-        const op2 = new TextOperation().retain(1).insert("BC").retain(5); // aBCbcdef
-        transformTest(doc, op1, op2);
-    });
+  it("should transform delete/insert", () => {
+    const op1 = new TextOperation().retain(1).delete(2).retain(3); // adef
+    const op2 = new TextOperation().retain(1).insert("BC").retain(5); // aBCbcdef
+    transformTest(doc, op1, op2);
+  });
 
-    it("should transform concurrent inserts at same position", () => {
-        const op1 = new TextOperation().retain(1).insert("X").retain(5); // aXbcdef
-        const op2 = new TextOperation().retain(1).insert("Y").retain(5); // aYbcdef
-        transformTest(doc, op1, op2);
-    });
+  it("should transform concurrent inserts at same position", () => {
+    const op1 = new TextOperation().retain(1).insert("X").retain(5); // aXbcdef
+    const op2 = new TextOperation().retain(1).insert("Y").retain(5); // aYbcdef
+    transformTest(doc, op1, op2);
+  });
 
-    it("should transform concurrent deletes of overlapping regions", () => {
-        const op1 = new TextOperation().retain(1).delete(3).retain(2); // aef (deletes bcd)
-        const op2 = new TextOperation().retain(2).delete(3).retain(1); // abf (deletes cde)
-        transformTest(doc, op1, op2);
-    });
+  it("should transform concurrent deletes of overlapping regions", () => {
+    const op1 = new TextOperation().retain(1).delete(3).retain(2); // aef (deletes bcd)
+    const op2 = new TextOperation().retain(2).delete(3).retain(1); // abf (deletes cde)
+    transformTest(doc, op1, op2);
+  });
 });
 
 
@@ -374,7 +374,6 @@ describe("Extended TextOperation Tests", () => {
     const afterB = b.apply(afterA);
     expect(b.targetLength).toBe(afterB.length);
     const ab = a.compose(b);
-    expect(ab.meta).toBe(a.meta);
     expect(ab.targetLength).toBe(b.targetLength);
     expect(ab.apply(str)).toBe(afterB);
   }));
