@@ -73,7 +73,7 @@ function editorApp() {
     serverUrl: "http://localhost:3000", // Default server URL
     statusText: "Connecting...",
     isConnected: false,
-    mode: "Manual", // 'Manual' or 'Automatic'
+    mode: "Automatic", // 'Manual' or 'Automatic'
     log: [] as string[],
 
     // OT State

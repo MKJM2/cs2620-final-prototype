@@ -52,7 +52,7 @@
         <button @click="pushChanges" :disabled="!canPush()">
           Push Changes &uarr;
         </button>
-        <button @click="pullChanges" :disabled="!canPull()">
+        <button @click="pullChanges" :disabled="!canPull() || mode === 'Automatic'">
           Pull Changes &darr;
         </button>
         <span x-show="state === 'dirty'" class="state-indicator">Unpushed changes</span>
