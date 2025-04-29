@@ -368,6 +368,7 @@ function editorApp() {
         try {
           this.syncedDoc = this.outstandingOp.apply(this.syncedDoc);
         } catch (e: any) {
+          this.state = "dirty"; // Forcefully reset state to dirty to allow for pull
           this.addLog(`CRITICAL ERROR during transform (update): ${e.message}. Forcing pull.`);
           this.pullChanges();
           return;
@@ -406,6 +407,7 @@ function editorApp() {
         // that might exist (either outstanding or just dirty).
 
         // 1. Transform against outstanding operation (if any)
+        let serverOpOG = serverOp; // Keep original for logging
         if (this.outstandingOp) {
           if (this.outstandingOp.baseLength !== serverOp.baseLength) {
             this.addLog(`CRITICAL ERROR: Base length mismatch during transform (update). Outstanding: ${this.outstandingOp.baseLength}, Server: ${serverOp.baseLength}. Forcing pull.`);
@@ -415,9 +417,9 @@ function editorApp() {
           try {
             const [serverOpPrime, outstandingOpPrime] =
               TextOperation.transform(serverOp, this.outstandingOp);
+            this.addLog(`Transformed server op (${serverOp.toString()}) against outstanding op (${this.outstandingOp.toString()}). Resulting op: ${serverOpPrime.toString()}`);
             serverOp = serverOpPrime;
             this.outstandingOp = outstandingOpPrime;
-            this.addLog(`Transformed server op against outstanding op.`);
           } catch (e: any) {
             this.addLog(`CRITICAL ERROR during transform (update): ${e.message}. Forcing pull.`);
             this.pullChanges();
@@ -425,9 +427,13 @@ function editorApp() {
           }
         }
 
-        // 2. Apply the (potentially transformed) serverOp to our syncedDoc baseline
+        // 2. Apply the (untransformed!) serverOp to our syncedDoc baseline
+        // You want to apply the untransformed one, since it is this op that takes
+        // the server copy from rev X to rev X + 1. Our syncedDoc is at rev X, and
+        // simply tracks that.
         try {
-          this.syncedDoc = serverOp.apply(this.syncedDoc);
+          // this.syncedDoc = this.outstandingOp?.apply(this.syncedDoc) || this.syncedDoc;
+          this.syncedDoc = serverOpOG.apply(this.syncedDoc);
         } catch (e: any) {
           this.addLog(`CRITICAL ERROR applying server op to syncedDoc: ${e.message}. Forcing pull.`);
           this.pullChanges();
@@ -481,6 +487,7 @@ function editorApp() {
             this.editor!.selection.moveCursorToPosition(acePos);
             this.editor!.clearSelection();  // we only support single point carets for now
           })();
+          this.virtualDoc = newEditorContent; // Update virtualDoc to reflect the new editor content
         } catch (e: any) {
           this.addLog(`CRITICAL ERROR applying transformed server op to editor: ${e.message}. Forcing pull.`);
           this.pullChanges();
@@ -571,9 +578,10 @@ function editorApp() {
           }
 
         } catch (error: any) {
-          this.addLog(`CRITICAL ERROR applying history: ${error.message}. Requesting full reset.`);
-          this.state = 'initializing';
-          this.editor?.setReadOnly(true);
+          this.addLog(`CRITICAL ERROR applying history: ${error.message}. Performing full reset.`);
+          this.syncedDoc = this.virtualDoc = msg.currentDocState;
+          this.localRevision = msg.currentRevision;
+          this.serverRevision = msg.currentRevision;
 
           const cursorIdx = positionToIndex(currentEditorContent.split("\n"), this.editor!.getCursorPosition());
           this.withNoLocalUpdate(() => {
@@ -584,6 +592,9 @@ function editorApp() {
             this.editor!.selection.moveCursorToPosition(acePos);
             this.editor!.clearSelection();  // we only support single point carets for now
           })();
+
+          this.editor?.setReadOnly(false);
+          this.state = 'synchronized'
         } finally {
           if (this.state === 'awaitingPull') {
             // If we were awaiting pull, transition based on outcome
