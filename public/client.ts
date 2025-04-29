@@ -106,13 +106,15 @@ function editorApp() {
     bufferedOp: null as TextOperation | null,
     ignoreNextEditorChange: false, // Flag to prevent feedback loops when setting editor value programmatically
 
-    // Automatic Mode State management
-    autoPushIntervalId: null as number | null, // Stores the interval ID
-    autoPushIntervalMs: 200, // Interval in milliseconds
-
     // User presence tracking
     username: null as string | null, // Our assigned username
     users: [] as UserInfo[], // List of all users connected to the same doc
+    // UI State: which view to show in the right pane (preview or debug)
+    viewMode: 'preview' as 'preview' | 'debug',
+
+    // Automatic Mode State management
+    autoPushIntervalId: null as number | null, // Stores the interval ID
+    autoPushIntervalMs: 200, // Interval in milliseconds
 
     // --- Computed Properties / Helpers ---
     canPush(): boolean {
@@ -226,7 +228,7 @@ function editorApp() {
     /** Initialize Ace Editor */
     initEditor() {
       this.editor = ace!.edit("editor");  // Ace will be loaded via CDN, and not bundled
-      this.editor.setTheme("ace/theme/monokai");
+      this.editor.setTheme("ace/theme/chrome");
       this.editor.session.setMode("ace/mode/markdown");
       this.editor.setReadOnly(true); // Read-only until connected and state received
 

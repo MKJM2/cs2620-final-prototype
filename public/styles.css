@@ -1,0 +1,48 @@
+/*
+Overwrites for tailwind typography / Marked.js defaults
+*/
+
+#markdown-preview {
+    font-family: 'Latin Modern Math', 'STIX Two Math', 'Cambria Math', 'Times New Roman', Times, serif;
+    font-size: 1.1em;
+    line-height: 1.7;
+    color: #222;
+    background: #fff;
+    /* Optional: mimic LaTeX page look */
+    /* box-shadow: 0 2px 8px rgba(0,0,0,0.05); */
+  }
+  #markdown-preview h1, 
+  #markdown-preview h2, 
+  #markdown-preview h3, 
+  #markdown-preview h4, 
+  #markdown-preview h5, 
+  #markdown-preview h6 {
+    font-family: inherit;
+    font-weight: normal;
+    margin-bottom: 0.5em;
+    border-bottom: 0.5px solid #e5e7eb; /* Tailwind gray-200 */
+  }
+  #markdown-preview blockquote {
+    border-left: 3px solid #bbb;
+    color: #555;
+    padding-left: 1em;
+    margin-left: 0;
+    font-style: italic;
+    background: #f9f9f9;
+  }
+  #markdown-preview code, 
+  #markdown-preview pre {
+    font-family: 'Fira Mono', 'Consolas', 'Menlo', 'Monaco', monospace;
+    color: #222;
+    background: #f8f8f8ab;
+    border-radius: 4px;
+    padding: 0.2em 0.4em;
+  }
+  #markdown-preview table {
+    border-collapse: collapse;
+    margin: 1em 0;
+  }
+  #markdown-preview th, #markdown-preview td {
+    border: 1px solid #ddd;
+    padding: 0.5em 1em;
+  }

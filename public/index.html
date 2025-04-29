@@ -4,7 +4,22 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Real-time Markdown Editor (OT)</title>
-    <link rel="stylesheet" href="public/style.css" />
+    <!-- Tailwind Play CDN Script -->
+    <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
+
+    <!-- Flowbite CSS -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/flowbite/2.3.0/flowbite.min.css" rel="stylesheet" />
+
+    <!-- KaTeX CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.css" integrity="sha384-5TcZemv2l/9On385z///+d7MSYlvIEw9FuZTIdZ14vJLqWphw7e7ZPuOiCHJcFCP" crossorigin="anonymous">
+
+    <!-- LaTeX-like font -->
+    <link href="https://fonts.cdnfonts.com/css/latin-modern-math" rel="stylesheet">
+                
+
+    <!-- Styles -->
+    <link rel="stylesheet" href="public/styles.css">
+
     <!-- Ace Editor -->
     <script
       src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.33.0/ace.js"
@@ -16,6 +31,9 @@
       src="https://cdn.socket.io/4.7.5/socket.io.min.js"
       crossorigin="anonymous"
     ></script>
+    <!-- Marked.js (Markdown Parser) -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
     <!-- Alpine Core -->
     <script
       defer
@@ -29,73 +47,177 @@
     -->
   </head>
   <body>
+    <!-- Main container managed by Alpine -->
     <div
-      class="container"
       x-data="editorApp"
-    >
-      <h2>Collaborative Markdown Editor</h2>
+      class="h-screen overflow-hidden"
+      x-init="console.log('Alpine init on editorApp div'); setTimeout(window.renderMarkdownPreview, 300)"  
+      x-effect="virtualDoc; window.renderMarkdownPreview()" 
+     > <!-- Prevent scrolling on body -->
+      <!-- New Structure using Tailwind and Flowbite -->
+      <div class="flex flex-col h-full bg-gray-100">
+        <!-- 1. Header/Toolbar -->
+        <header class="bg-white shadow p-2 flex justify-between items-center flex-shrink-0 z-10">
+            <!-- View Mode and Server Info -->
+            <div class="flex items-center space-x-4">
+              <!-- View Mode Tabs -->
+              <div class="inline-flex rounded-md shadow-sm" role="group">
+                <button type="button" @click="viewMode = 'preview'" :class="viewMode === 'preview' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-blue-600 border-blue-600'" class="px-2 py-1 text-xs font-medium border first:rounded-l-md last:rounded-r-md">Preview</button>
+                <button type="button" @click="viewMode = 'debug'" :class="viewMode === 'debug' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-blue-600 border-blue-600'" class="px-2 py-1 text-xs font-medium border first:rounded-l-md last:rounded-r-md">Debug</button>
+              </div>
+              <!-- Server Info -->
+              <div class="text-sm text-gray-700 space-x-2">
+                <span>Server: <strong x-text="serverUrl" class="font-semibold text-blue-600">N/A</strong></span>
+                <span>Status: <strong x-text="statusText" class="font-semibold">...</strong></span>
+              </div>
+            </div>
+            <!-- User Avatars -->
+            <div class="flex items-center space-x-1">
+                 <template x-for="user in users" :key="user.id">
+                    <!-- Using Flowbite Tooltip -->
+                    <div x-data="{ tooltip: user.name }"
+                         :data-tooltip-target="'tooltip-user-' + user.id" 
+                         data-tooltip-placement="bottom"
+                         class="w-7 h-7 rounded-full text-white flex items-center justify-center text-xs font-bold cursor-default shadow"
+                         :style="`background-color: ${user.color || '#3B82F6'}`">
+                         <!-- Display first initial -->
+                         <span x-text="user.name ? user.name.substring(0, 1).toUpperCase() : '?'"></span>
+                    </div>
+                    <div :id="'tooltip-user-' + user.id" role="tooltip" class="absolute z-10 invisible inline-block px-3 py-2 text-sm font-medium text-white transition-opacity duration-300 bg-gray-900 rounded-lg shadow-sm opacity-0 tooltip dark:bg-gray-700">
+                        <span x-text="user.name">Anonymous User</span>
+                        <div class="tooltip-arrow" data-popper-arrow></div>
+                    </div>
+                 </template>
+                 <span x-show="!users || users.length === 0" class="text-xs text-gray-500 italic ml-2">Just you</span>
+            </div>
+        </header>
 
-      <div class="status-bar">
-        <span>Status: <strong x-text="statusText">Connecting...</strong></span>
-        <span>Server: <strong x-text="serverUrl">N/A</strong></span>
-        <span>Mode:
-          <select x-model="mode" @change="handleModeChange">
-            <option value="Manual">Manual Push/Pull</option>
-            <option value="Automatic">Automatic (WIP)</option>
-          </select>
-        </span>
-        <span>Server Rev: <strong x-text="serverRevision">?</strong></span>
-        <span>Client Rev: <strong x-text="localRevision">?</strong></span>
-      </div>
+        <!-- 2. Main Content Area (Editor | Preview) -->
+        <main class="flex-grow flex flex-col md:flex-row overflow-hidden"> <!-- Ensure main area grows and handles overflow -->
+            <!-- Left Pane: Editor -->
+            <div class="w-full md:w-1/2 h-1/2 md:h-full border-r border-gray-300 flex flex-col overflow-hidden">
+               <!-- IMPORTANT: The Ace editor container needs explicit height/width to render -->
+               <div id="editor" class="flex-grow w-full h-full"></div>
+            </div>
 
-      <div class="controls">
-        <button @click="pushChanges" :disabled="!canPush()">
-          Push Changes &uarr;
-        </button>
-        <button @click="pullChanges" :disabled="!canPull() || mode === 'Automatic'">
-          Pull Changes &darr;
-        </button>
-        <span x-show="state === 'dirty'" class="state-indicator">Unpushed changes</span>
-        <span x-show="state === 'awaitingPush'" class="state-indicator">Pushing...</span>
-         <span x-show="state === 'awaitingPull'" class="state-indicator">Pulling...</span>
-      </div>
-
-      <div id="side-by-side">
-        <div class="editor-container">
-            <div id="editor"></div>
-        </div>
-        <div class="ot-state-container">
-            <h2>OT State</h2>
-            <div>
-                <strong>Outstanding Op:</strong>
-                <pre x-text="outstandingOp ? JSON.stringify(outstandingOp.toJSON(), null, 2) : 'None'"></pre>
+            <!-- Right Pane: Preview / Debug -->
+            <div class="w-full md:w-1/2 h-1/2 md:h-full flex flex-col bg-white overflow-hidden">
+              <!-- Markdown Preview -->
+              <div id="markdown-preview" x-show="viewMode === 'preview'" class="flex-grow p-4 overflow-y-auto prose lg:prose-base max-w-none">
+                <p x-show="!virtualDoc" class="text-gray-400 italic">Loading Preview...</p>
+              </div>
+              <!-- OT.js Debug Panel -->
+              <div id="debug-panel" x-show="viewMode === 'debug'" class="flex-grow p-4 overflow-y-auto bg-gray-50 prose-sm font-mono text-xs text-gray-800">
+                <h4 class="font-semibold mb-2">Debug Panel</h4>
+                <div><strong>bufferedOp:</strong> <span x-text="bufferedOp ? bufferedOp.toString() : 'null'"></span></div>
+                <div><strong>outstandingOp:</strong> <span x-text="outstandingOp ? outstandingOp.toString() : 'null'"></span></div>
+                <div><strong>serverRevision:</strong> <span x-text="serverRevision"></span></div>
+                <div><strong>localRevision:</strong> <span x-text="localRevision"></span></div>
+                <div><strong>state:</strong> <span x-text="state"></span></div>
+                <hr class="my-2">
+                <h5 class="font-semibold mb-1">Log</h5>
+                <template x-for="(item, idx) in log" :key="idx">
+                  <div x-text="item"></div>
+                </template>
+              </div>
             </div>
-            <div>
-                <strong>Buffered Op:</strong>
-                <pre x-text="bufferedOp ? JSON.stringify(bufferedOp.toJSON(), null, 2) : 'None'"></pre>
-            </div>
-            <div>
-                <strong>Virtual Doc:</strong>
-                <pre x-text="virtualDoc"></pre>
-            </div>
-            <div>
-                <strong>Latest-synced Doc:</strong>
-                <pre x-text="syncedDoc"></pre>
-            </div>
-        </div>
-      </div>
-      <div class="log-container">
-        <h2>Operation Log</h2>
-        <ul id="log">
-          <template x-for="(entry, index) in log" :key="index">
-            <li x-text="entry"></li>
-          </template>
-        </ul>
+        </main>
       </div>
     </div>
 
     <!-- Client Bundle (created by Bun build or tsc) -->
     <script src="/public/client.js"></script>
+
+    <!-- Flowbite JS (needs to be loaded after Alpine potentially, and after elements exist) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/flowbite/2.3.0/flowbite.min.js"></script>
+
+    <!-- KaTeX JS (Core and Auto-render Extension) - Loaded before main script -->
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.js" integrity="sha384-cMkvdD8LoxVzGF/RPUKAcvmm49FQ0oxwDF3BGKtDXcEc+T1b2N+teh/OJfpU0jr6" crossorigin="anonymous"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/contrib/auto-render.min.js" integrity="sha384-hCXGrW6PitJEwbkoStFjeJxv+fSOOQKOPbJxSfM6G5sWZjAyWhXiTIIAmQqnlLlh" crossorigin="anonymous"
+        onload="renderMathInElement(document.getElementById('markdown-preview'));"></script>
+
+    <!-- Script for Markdown Preview -->
+    <script>
+      // Define the global render function
+      window.renderMarkdownPreview = () => {
+        // console.debug("Attempting to render markdown preview..."); // Debug log
+        try {
+          // Check dependencies
+          if (typeof ace === 'undefined' || typeof marked === 'undefined') {
+            // console.debug("Render skipped: Ace or Marked not loaded yet.");
+            return; // Libraries not ready
+          }
+
+          const editorElement = document.getElementById("editor");
+          const previewElement = document.getElementById('markdown-preview');
+
+          if (!editorElement || !previewElement) {
+             // console.debug("Render skipped: Editor or Preview element not found yet.");
+            return; // Elements not ready
+          }
+
+          // Get Ace instance - check if it's already initialized
+          const editorInstance = ace.edit(editorElement);
+          if (!editorInstance || !editorInstance.session) {
+              // console.debug("Render skipped: Ace editor instance not ready yet.");
+              return; // Ace not fully ready
+          }
+
+          // Configure Marked (do this once or ensure it's idempotent)
+          // Consider defining 'mdParser' globally if preferred
+          const mdParser = new marked.Marked({
+            gfm: true,
+            breaks: false,
+            pedantic: false,
+            smartLists: true,
+            smartypants: true,
+            headerIds: true,
+            mangle: false,
+          });
+
+          // Get content and render
+          const markdownContent = editorInstance.getValue();
+          const htmlContent = mdParser.parse(markdownContent);
+          previewElement.innerHTML = htmlContent; // Set the parsed HTML
+
+          // Now, render math within the newly updated preview element
+          if (typeof renderMathInElement === 'function') {
+            try {
+               renderMathInElement(previewElement, {
+                 // customised options
+                 // • auto-render specific keys, e.g.:
+                 delimiters: [
+                   {left: "$$", right: "$$", display: true},
+                   {left: "$", right: "$", display: false},
+                   {left: "\\(", right: "\\)", display: false},
+                  //  {left: "\(", right: "\)", display: false},
+                   {left: "\\begin{equation}", right: "\\end{equation}", display: true},
+                   {left: "\\begin{align}", right: "\\end{align}", display: true},
+                   {left: "\\begin{alignat}", right: "\\end{alignat}", display: true},
+                   {left: "\\begin{gather}", right: "\\end{gather}", display: true},
+                   {left: "\\begin{CD}", right: "\\end{CD}", display: true},
+                   {left: "\\[", right: "\\]", display: true},
+                  //  {left: "\[", right: "\]", display: true}
+    ],
+                 // • rendering keys, e.g.:
+                 throwOnError : false
+               });
+            } catch (mathError) {
+              console.error("KaTeX auto-render error:", mathError);
+            }
+          } else {
+            console.warn("renderMathInElement is not available yet.");
+          }
+
+        } catch (error) {
+          console.error("Error during renderMarkdownPreview:", error);
+          const previewElement = document.getElementById('markdown-preview');
+          if (previewElement) {
+            previewElement.innerHTML = '<p class="text-red-500">Error rendering preview.</p>';
+          }
+        }
+      };
     </script>
+
   </body>
 </html>
