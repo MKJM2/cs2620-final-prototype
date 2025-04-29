@@ -1,6 +1,12 @@
 // src/types.ts
 import { OperationComponent } from "./ot";
 
+export interface UserInfo {
+  id: string; // Socket ID
+  username: string;
+}
+
+
 // Client -> Server
 export interface ClientPushMsg {
   /** The client's last known server revision number. */
@@ -28,20 +34,49 @@ export interface ServerUpdateMsg {
 }
 
 export interface ServerHistoryMsg {
-    /** The revision number of the first op in the list. */
-    startRevision: number;
-    /** The list of operations since the client's requested revision. */
-    ops: OperationComponent[][];
-    /** The current latest revision on the server. */
-    currentRevision: number;
+  /** The revision number of the first op in the list. */
+  startRevision: number;
+  /** The list of operations since the client's requested revision. */
+  ops: OperationComponent[][];
+  /** The current latest revision on the server. */
+  currentRevision: number;
+  /* Useful for debugging, but should remain unused in production */
+  currentDocState: string;
 }
 
 export interface ServerInitialStateMsg {
-    /** The current full document content. */
-    doc: string;
-    /** The current revision of the document. */
-    revision: number;
+  /** The current full document content. */
+  doc: string;
+  /** The current revision of the document. */
+  revision: number;
 }
 
-export type ServerMsg = ServerAckMsg | ServerUpdateMsg | ServerHistoryMsg | ServerInitialStateMsg;
+export interface ServerErrorMsg {
+  /** Server sends an error message */
+  message: string;
+}
+
+export type ServerMsg = ServerAckMsg | ServerUpdateMsg | ServerHistoryMsg | ServerInitialStateMsg | ServerErrorMsg;
 export type ClientMsg = ClientPushMsg | ClientPullMsg;
+
+// --- User Presence Messages (Server -> Client) ---
+
+/** Server tells the client its assigned identity */
+export interface ServerYourIdentityMsg {
+  user: UserInfo;
+}
+
+/** Server sends the list of currently connected users */
+export interface ServerCurrentUsersMsg {
+  users: UserInfo[];
+}
+
+/** Server broadcasts when a new user joins */
+export interface ServerUserJoinedMsg {
+  user: UserInfo;
+}
+
+/** Server broadcasts when a user leaves */
+export interface ServerUserLeftMsg {
+  userId: string; // Just need the ID to remove them
+}

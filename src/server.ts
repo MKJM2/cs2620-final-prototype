@@ -7,12 +7,18 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { TextOperation } from "./ot";
 import type {
+  UserInfo,
   ClientPushMsg,
   ClientPullMsg,
   ServerAckMsg,
+  ServerErrorMsg,
   ServerUpdateMsg,
   ServerHistoryMsg,
   ServerInitialStateMsg,
+  ServerYourIdentityMsg,
+  ServerCurrentUsersMsg,
+  ServerUserJoinedMsg,
+  ServerUserLeftMsg
 } from "./types";
 import { Socket } from "socket.io";
 
@@ -22,11 +28,32 @@ const __dirname = path.dirname(__filename);
 
 console.log("Starting OT Server...");
 
+// --- User Name Generation ---
+const adjectives = [
+  "Agile", "Brave", "Calm", "Dandy", "Eager", "Fancy", "Gentle", "Happy",
+  "Jolly", "Kind", "Lively", "Merry", "Nice", "Orange", "Proud",
+  "Quirky", "Vivid", "Witty", "Anonymous",
+];
+const animals = [
+  "Badger", "Cat", "Dog", "Elephant", "Fox", "Giraffe", "Hippo",
+  "Iguana", "Jaguar", "Koala", "Lemur", "Narwhal", "Octopus",
+  "Penguin", "Quokka", "Rabbit", "Tiger", "Walrus", "Zebra",
+];
+
+function generateFunnyName(): string {
+  const adj = adjectives[Math.floor(Math.random() * adjectives.length)];
+  const animal = animals[Math.floor(Math.random() * animals.length)];
+  return `${adj} ${animal}`;
+}
+
 // --- OT Server State ---
-let documentState = "abcdef";
+let documentState = "";
 let currentRevision = 0;
 // History of applied operations (each op takes state from rev n to rev n+1)
 const operationHistory: TextOperation[] = [];
+
+// -- User Presence State ---
+const connectedUsers = new Map<string, UserInfo>();
 
 // --- Fastify Server Setup ---
 const app = fastify();
@@ -59,6 +86,30 @@ app.ready().then(() => {
   app.io.on("connection", (socket: Socket) => {
     console.log(`Client connected: ${socket.id}`);
 
+    // --- User Presence Handling ---
+    // 1. Assign a name and store user info
+    const username = generateFunnyName();
+    const userInfo: UserInfo = { id: socket.id, username };
+    connectedUsers.set(socket.id, userInfo);
+    // Store on socket data for easy access on disconnect
+    socket.data.userInfo = userInfo;
+    console.log(`Assigned name "${username}" to ${socket.id}`);
+
+    // 2. Send the client their identity
+    const identityMsg: ServerYourIdentityMsg = { user: userInfo };
+    socket.emit("your_identity", identityMsg);
+
+    // 3. Send the new client the list of *all* current users (including themselves)
+    const allUsers = Array.from(connectedUsers.values());
+    const currentUsersMsg: ServerCurrentUsersMsg = { users: allUsers };
+    socket.emit("current_users", currentUsersMsg);
+    console.log(`Sent current user list (${allUsers.length}) to ${socket.id}`);
+
+    // 4. Broadcast to *other* clients that a new user joined
+    const joinedMsg: ServerUserJoinedMsg = { user: userInfo };
+    socket.broadcast.emit("user_joined", joinedMsg);
+    console.log(`Broadcast user_joined for ${socket.id} (${username})`);
+
     // 4a. Send the initial document state.
     const initialStateMsg: ServerInitialStateMsg = {
       doc: documentState,
@@ -80,9 +131,10 @@ app.ready().then(() => {
           console.error(
             `Invalid revision ${clientRevision} from ${socket.id}. Server revision is ${currentRevision}.`
           );
-          socket.emit("error", {
+          const errorMsg: ServerErrorMsg = {
             message: `Invalid revision ${clientRevision}. Server is at ${currentRevision}. Please pull.`,
-          });
+          };
+          socket.emit("error", errorMsg);
           return;
         }
 
@@ -139,10 +191,10 @@ app.ready().then(() => {
           "Message:",
           msg
         );
-        socket.emit("error", {
-          message: `Failed to process operation: ${error.message || "Unknown error"
-            }`,
-        });
+        const errorMsg: ServerErrorMsg = {
+          message: `Failed to process operation: ${error.message || "Unknown error"}`,
+        };
+        socket.emit("error", errorMsg);
       }
     });
 
@@ -163,6 +215,7 @@ app.ready().then(() => {
           startRevision: 1,
           ops: historyToSend,
           currentRevision: currentRevision,
+          currentDocState: documentState,
         };
         socket.emit("history", historyMsg);
         console.warn(
@@ -174,10 +227,12 @@ app.ready().then(() => {
       const opsToSend = operationHistory
         .slice(clientRevision)
         .map((op) => op.toJSON());
+
       const historyMsg: ServerHistoryMsg = {
         startRevision: clientRevision + 1,
         ops: opsToSend,
         currentRevision: currentRevision,
+        currentDocState: documentState,
       };
       socket.emit("history", historyMsg);
       console.log(
@@ -187,7 +242,21 @@ app.ready().then(() => {
 
     // 4d. Handle disconnect.
     socket.on("disconnect", (reason: any) => {
-      console.log(`Client disconnected: ${socket.id}. Reason: ${reason}`);
+      const leavingUser = socket.data.userInfo as UserInfo | undefined;
+      const username = leavingUser?.username || "Unknown User";
+      console.log(
+        `Client disconnected: ${socket.id} (${username}). Reason: ${reason}`
+      );
+
+      // Remove user from tracking
+      if (connectedUsers.delete(socket.id)) {
+        // Broadcast that the user left
+        const leftMsg: ServerUserLeftMsg = { userId: socket.id };
+        socket.broadcast.emit("user_left", leftMsg);
+        console.log(`Broadcast user_left for ${socket.id} (${username})`);
+      } else {
+        console.warn(`User ${socket.id} disconnected but was not found in connectedUsers map.`);
+      }
     });
   });
 });

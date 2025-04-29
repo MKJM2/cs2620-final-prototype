@@ -4,10 +4,16 @@ import { TextOperation } from "../src/ot"; // Adjust path
 import type {
   ServerInitialStateMsg,
   ServerAckMsg,
+  ServerErrorMsg,
   ServerUpdateMsg,
   ServerHistoryMsg,
   ClientPushMsg,
   ClientPullMsg,
+  UserInfo,
+  ServerYourIdentityMsg,
+  ServerCurrentUsersMsg,
+  ServerUserJoinedMsg,
+  ServerUserLeftMsg
 } from "../src/types"; // Adjust path
 
 // Make ace available globally if needed, or import types if using modules
@@ -103,6 +109,10 @@ function editorApp() {
     // Automatic Mode State management
     autoPushIntervalId: null as number | null, // Stores the interval ID
     autoPushIntervalMs: 200, // Interval in milliseconds
+
+    // User presence tracking
+    username: null as string | null, // Our assigned username
+    users: [] as UserInfo[], // List of all users connected to the same doc
 
     // --- Computed Properties / Helpers ---
     canPush(): boolean {
@@ -268,6 +278,8 @@ function editorApp() {
         this.outstandingOp = null;
         this.editor?.setReadOnly(true);
         this.stopAutoPushTimer(); // Stop auto-push on disconnect
+        this.username = null;
+        this.users = [];
       });
 
       this.socket.on("connect_error", (err) => {
@@ -280,6 +292,44 @@ function editorApp() {
         this.outstandingOp = null;
         this.editor?.setReadOnly(true);
         this.stopAutoPushTimer();
+        this.username = null;
+        this.users = [];
+      });
+
+      // --- User Presence handlers ---
+      this.socket.on("your_identity", (msg: ServerYourIdentityMsg) => {
+        this.username = msg.user.username;
+        this.addLog(`Server assigned username: ${this.username} (ID: ${msg.user.id})`);
+        // Note: We don't add ourselves to the 'users' list here,
+        // 'current_users' will contain our info.
+      });
+
+      this.socket.on("current_users", (msg: ServerCurrentUsersMsg) => {
+        this.users = msg.users;
+        this.addLog(`Received current user list (${this.users.length} users)`);
+        // Sort users alphabetically for consistent display
+        this.users.sort((a, b) => a.username.localeCompare(b.username));
+      });
+
+      this.socket.on("user_joined", (msg: ServerUserJoinedMsg) => {
+        // Avoid adding duplicates if messages arrive out of order
+        if (!this.users.some(u => u.id === msg.user.id)) {
+          this.users.push(msg.user);
+          this.addLog(`User joined: ${msg.user.username} (ID: ${msg.user.id})`);
+          // Re-sort
+          this.users.sort((a, b) => a.username.localeCompare(b.username));
+        }
+      });
+
+      this.socket.on("user_left", (msg: ServerUserLeftMsg) => {
+        const index = this.users.findIndex(u => u.id === msg.userId);
+        if (index !== -1) {
+          const leavingUsername = this.users[index].username;
+          this.users.splice(index, 1);
+          this.addLog(`User left: ${leavingUsername} (ID: ${msg.userId})`);
+        } else {
+          this.addLog(`Received user_left for unknown ID: ${msg.userId}`);
+        }
       });
 
       // --- Server Message Handlers ---
@@ -315,7 +365,13 @@ function editorApp() {
         // The document state *before* this ACK corresponds to the baseLength of outstandingOp.
         // The document state *after* this ACK corresponds to the targetLength of outstandingOp.
         // Update syncedDoc to reflect the state that the server now has.
-        this.syncedDoc = this.outstandingOp.apply(this.syncedDoc);
+        try {
+          this.syncedDoc = this.outstandingOp.apply(this.syncedDoc);
+        } catch (e: any) {
+          this.addLog(`CRITICAL ERROR during transform (update): ${e.message}. Forcing pull.`);
+          this.pullChanges();
+          return;
+        }
 
         this.serverRevision = msg.revision;
         this.localRevision = msg.revision; // Align local revision after successful push
@@ -518,9 +574,16 @@ function editorApp() {
           this.addLog(`CRITICAL ERROR applying history: ${error.message}. Requesting full reset.`);
           this.state = 'initializing';
           this.editor?.setReadOnly(true);
-          this.setEditorValue("Error applying history. Reconnecting...");
-          // Force reconnect to get fresh initial state
-          this.socket?.disconnect().connect();
+
+          const cursorIdx = positionToIndex(currentEditorContent.split("\n"), this.editor!.getCursorPosition());
+          this.withNoLocalUpdate(() => {
+            // (re)write the text
+            this.editor!.setValue(msg.currentDocState, -1);
+            // Move caret to the transformed lcoation
+            const acePos = this.editor!.session.doc.indexToPosition(Math.min(msg.currentDocState.length, cursorIdx), 0);
+            this.editor!.selection.moveCursorToPosition(acePos);
+            this.editor!.clearSelection();  // we only support single point carets for now
+          })();
         } finally {
           if (this.state === 'awaitingPull') {
             // If we were awaiting pull, transition based on outcome
@@ -536,7 +599,7 @@ function editorApp() {
         }
       });
 
-      this.socket.on("error", (msg: { message: string }) => {
+      this.socket.on("error", (msg: ServerErrorMsg) => {
         this.addLog(`Server Error: ${msg.message}`);
         // Could indicate push failure, etc. May need recovery logic.
         if (this.state === 'awaitingPush') {
@@ -682,7 +745,6 @@ function editorApp() {
       // We need to restart the timer *after* the history is processed and state settles.
       // This is handled within the 'history' event handler's final state check.
       // We might need a flag or check the mode again in the history handler's finally block.
-      // Let's modify the history handler slightly.
     },
 
     // --- Init ---
