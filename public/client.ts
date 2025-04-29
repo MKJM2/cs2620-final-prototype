@@ -98,6 +98,7 @@ function editorApp() {
     outstandingOp: null as TextOperation | null,
     /** Local changes made since last successful push/pull, not yet pushed */
     bufferedOp: null as TextOperation | null,
+    updateQueue: [] as ServerUpdateMsg[],
     ignoreNextEditorChange: false, // Flag to prevent feedback loops when setting editor value programmatically
 
     // Automatic Mode State management
@@ -125,6 +126,7 @@ function editorApp() {
     // --- Methods ---
     addLog(message: string) {
       const timestamp = new Date().toLocaleTimeString();
+      console.debug(message);
       this.log.unshift(`[${timestamp}] ${message}`);
       if (this.log.length > 100) {
         // Keep log size manageable
@@ -212,6 +214,150 @@ function editorApp() {
         }
       }
     },
+
+    /**
+     * Processes a single server update message. Assumes the client is NOT
+     * in the awaitingPush state when this is called directly.
+     * Transforms the op against bufferedOp, applies it to syncedDoc and editor.
+     */
+    processServerUpdate(msg: ServerUpdateMsg) {
+      this.addLog(
+        `Processing server update for revision ${msg.revision}. Op: ${TextOperation.fromJSON(msg.op).toString()}`,
+      );
+
+      if (msg.revision !== this.serverRevision + 1) {
+        this.addLog(
+          `Error: Received out-of-order update (expected ${this.serverRevision + 1}, got ${msg.revision}). Requesting full sync.`,
+        );
+        this.pullChanges(); // Request history to re-sync
+        return;
+      }
+
+      let serverOp: TextOperation = TextOperation.fromJSON(msg.op);
+
+      // --- CRITICAL CHANGE: Transformation logic simplified ---
+      // We only transform against the BUFFERED operation now.
+      // The transformation against outstandingOp is removed because this function
+      // is only called when state is NOT awaitingPush (or when processing the queue AFTER ack).
+
+      // 1. Transform against buffered operation (local changes made *after* the last push/ack)
+      if (this.bufferedOp) {
+        // Important: Ensure base lengths match for transformation
+        // The serverOp's baseLength should correspond to the state *after* any outstandingOp
+        // was applied, which is the base for our bufferedOp.
+        // Let's add a check, although conceptually they should align if server logic is correct.
+        const expectedBufferedBaseLength = this.syncedDoc.length; // Base for bufferedOp is the synced state
+        if (this.bufferedOp.baseLength !== expectedBufferedBaseLength) {
+          this.addLog(`CRITICAL ERROR: Base length mismatch for bufferedOp during update transform. Expected ${expectedBufferedBaseLength}, got ${this.bufferedOp.baseLength}. Forcing pull.`);
+          this.pullChanges();
+          return;
+        }
+        // Also check serverOp base length against syncedDoc
+        if (serverOp.baseLength !== this.syncedDoc.length) {
+          this.addLog(`CRITICAL ERROR: Base length mismatch for serverOp during update transform. Expected ${this.syncedDoc.length}, got ${serverOp.baseLength}. Forcing pull.`);
+          this.pullChanges();
+          return;
+        }
+
+        try {
+          // We transform the server op against the buffered local changes.
+          // [serverOp', bufferedOp'] = transform(serverOp, bufferedOp)
+          const [serverOpPrime, bufferedOpPrime] = TextOperation.transform(
+            serverOp,
+            this.bufferedOp,
+          );
+          serverOp = serverOpPrime; // Use the transformed server op
+          this.bufferedOp = bufferedOpPrime; // Update the buffered op
+          this.addLog(`Transformed server op against buffered op.`);
+        } catch (e: any) {
+          this.addLog(
+            `CRITICAL ERROR during transform against buffered op: ${e.message}. Forcing pull.`,
+          );
+          this.pullChanges();
+          return;
+        }
+      }
+
+      // 2. Apply the (potentially transformed) serverOp to our syncedDoc baseline
+      try {
+        this.syncedDoc = serverOp.apply(this.syncedDoc);
+      } catch (e: any) {
+        this.addLog(
+          `CRITICAL ERROR applying server op to syncedDoc: ${e.message}. Forcing pull.`,
+        );
+        this.pullChanges();
+        return;
+      }
+
+      // 3. Apply the same transformed server operation to the editor
+      // The editor content should reflect syncedDoc + bufferedOp. Applying serverOp
+      // (which was transformed against bufferedOp) should bring the editor state
+      // to syncedDoc' + bufferedOp'.
+      try {
+        const currentEditorContent = this.editor!.getValue();
+        // We apply the *same* serverOp that was applied to syncedDoc.
+        // Its transformation against bufferedOp ensures it correctly modifies
+        // the editor state which includes those buffered changes.
+        const newEditorContent = serverOp.apply(currentEditorContent);
+        this.setEditorValue(newEditorContent); // Uses withNoLocalUpdate internally
+        this.addLog(`Applied transformed server op (${serverOp.toString()}) to editor.`);
+        // Update virtualDoc AFTER applying to editor to keep it consistent
+        this.virtualDoc = this.editor!.getValue();
+      } catch (e: any) {
+        this.addLog(
+          `CRITICAL ERROR applying transformed server op to editor: ${e.message}. Forcing pull.`,
+        );
+        this.pullChanges();
+        return;
+      }
+
+      // 4. Update server revision
+      this.serverRevision = msg.revision;
+      // Local revision stays aligned in manual mode after an update is integrated.
+      // If we had buffered ops, they were transformed, but the base revision is now updated.
+      this.localRevision = msg.revision;
+
+      // 5. Re-evaluate state: If bufferedOp still exists (or became non-noop after transform), we are dirty.
+      if (this.bufferedOp && !this.bufferedOp.isNoop()) {
+        this.state = "dirty";
+        // No log needed here, state is naturally dirty
+      } else {
+        // If buffer is gone or became no-op, clear it and check sync state
+        this.bufferedOp = null;
+        if (this.editor?.getValue() === this.syncedDoc) {
+          this.state = 'synchronized';
+        } else {
+          // This case might indicate an issue, but let's assume editor value is the source of truth for "dirty"
+          this.state = 'dirty';
+          this.addLog("Warning: Editor content differs from syncedDoc after update, but buffer is empty. State -> dirty.");
+        }
+      }
+    }, // End of processServerUpdate
+
+    /** Processes any queued update messages */
+    applyQueuedUpdates() {
+      if (this.updateQueue.length === 0) {
+        return;
+      }
+      this.addLog(`Processing ${this.updateQueue.length} queued update(s)...`);
+      // Process updates FIFO
+      while (this.updateQueue.length > 0) {
+        const msg = this.updateQueue.shift();
+        if (msg) {
+          // Call the refactored processing logic
+          this.processServerUpdate(msg);
+          // If processServerUpdate triggered a pull, stop processing queue
+          if (this.state === 'awaitingPull' || this.state === 'initializing') {
+            this.addLog("Pull triggered during queue processing. Clearing remaining queue.");
+            this.updateQueue = [];
+            break;
+          }
+        }
+      }
+      this.addLog("Finished processing queued updates.");
+    },
+
+
 
     /** Initialize Ace Editor */
     initEditor() {
@@ -308,27 +454,55 @@ function editorApp() {
         if (!this.outstandingOp) {
           this.addLog(`Warning: Received ACK for revision ${msg.revision} but no outstanding operation was recorded.`);
           this.state = 'synchronized'; // Try to recover state
+          this.applyQueuedUpdates(); // Process queue if any
           return;
         }
 
         this.addLog(`Push acknowledged by server. New revision: ${msg.revision}`);
+
         // The document state *before* this ACK corresponds to the baseLength of outstandingOp.
         // The document state *after* this ACK corresponds to the targetLength of outstandingOp.
-        // Update syncedDoc to reflect the state that the server now has.
-        this.syncedDoc = this.outstandingOp.apply(this.syncedDoc);
+
+        // Apply the acknowledged outstanding op to the syncedDoc baseline
+        try {
+          this.syncedDoc = this.outstandingOp.apply(this.syncedDoc);
+        } catch (e: any) {
+          this.addLog(`CRITICAL ERROR applying outstanding op to syncedDoc on ACK: ${e.message}. Forcing pull.`);
+          // Clear outstanding op to prevent retries, state will be handled by pull
+          this.outstandingOp = null;
+          this.pullChanges();
+          return; // Stop processing ACK
+        }
+
 
         this.serverRevision = msg.revision;
         this.localRevision = msg.revision; // Align local revision after successful push
         this.outstandingOp = null;
 
-        // Check if editor content still differs from the newly synced state
-        if (this.bufferedOp) {
+        // State transition depends on whether there's a bufferedOp
+        if (this.bufferedOp && !this.bufferedOp.isNoop()) {
           this.state = "dirty";
-          this.addLog("Local changes were made while push was in flight. State -> dirty.");
+          this.addLog(
+            "Local changes were buffered while push was in flight. State -> dirty.",
+          );
         } else {
-          this.state = "synchronized";
-          this.virtualDoc = this.syncedDoc;
+          this.bufferedOp = null; // Ensure empty/noop buffer is cleared
+          // Check actual content match before declaring synchronized
+          if (this.editor?.getValue() === this.syncedDoc) {
+            this.state = "synchronized";
+          } else {
+            // If content differs but buffer is empty, something might be off.
+            // Treat as dirty to allow user/auto push to potentially fix it.
+            this.state = "dirty";
+            this.addLog("Warning: Editor content differs from syncedDoc after ACK, but buffer is empty. State -> dirty.");
+            // This might happen if setEditorValue caused inconsistencies previously.
+            // A pull might be warranted if this state persists.
+          }
         }
+
+        // --- CRITICALLY: Process the queue ---
+        this.applyQueuedUpdates();
+        // The state might change again inside applyQueuedUpdates
       });
 
       this.socket.on("update", (msg: ServerUpdateMsg) => {
@@ -336,103 +510,15 @@ function editorApp() {
           `Received server update for revision ${msg.revision}. Op: ${TextOperation.fromJSON(msg.op).toString()}`,
         );
 
-        if (msg.revision !== this.serverRevision + 1) {
+        if (this.state === "awaitingPush") {
           this.addLog(
-            `Error: Received out-of-order update (expected ${this.serverRevision + 1}, got ${msg.revision}). Requesting full sync.`,
+            `Queueing server update for rev ${msg.revision} while awaiting ACK.`,
           );
-          this.pullChanges(); // Request history to re-sync
-          return;
+          this.updateQueue.push(msg);
+          return; // Don't process now
         }
 
-        let serverOp: TextOperation = TextOperation.fromJSON(msg.op);
-
-        // We need to transform the incoming serverOp against any local changes
-        // that might exist (either outstanding or just dirty).
-
-        // 1. Transform against outstanding operation (if any)
-        if (this.outstandingOp) {
-          if (this.outstandingOp.baseLength !== serverOp.baseLength) {
-            this.addLog(`CRITICAL ERROR: Base length mismatch during transform (update). Outstanding: ${this.outstandingOp.baseLength}, Server: ${serverOp.baseLength}. Forcing pull.`);
-            this.pullChanges();
-            return;
-          }
-          try {
-            const [serverOpPrime, outstandingOpPrime] =
-              TextOperation.transform(serverOp, this.outstandingOp);
-            serverOp = serverOpPrime;
-            this.outstandingOp = outstandingOpPrime;
-            this.addLog(`Transformed server op against outstanding op.`);
-          } catch (e: any) {
-            this.addLog(`CRITICAL ERROR during transform (update): ${e.message}. Forcing pull.`);
-            this.pullChanges();
-            return;
-          }
-        }
-
-        // 2. Apply the (potentially transformed) serverOp to our syncedDoc baseline
-        try {
-          this.syncedDoc = serverOp.apply(this.syncedDoc);
-        } catch (e: any) {
-          this.addLog(`CRITICAL ERROR applying server op to syncedDoc: ${e.message}. Forcing pull.`);
-          this.pullChanges();
-          return;
-        }
-
-
-        // 3. Apply the (potentially transformed) serverOp to the current editor content
-        // We need to consider the *current* editor state which might include unpushed changes.
-        let currentEditorContent = this.editor!.getValue();
-        let editorOpToApply = serverOp; // Start with the op transformed against outstandingOp
-
-        // If we are in 'dirty' state, there are local changes *not* included in outstandingOp.
-        // We need to transform the serverOp against these implicit local changes.
-        if (this.state === 'dirty' && this.bufferedOp) {
-          try {
-            // We transform the server op (already transformed against outstanding)
-            // against the remaining local changes.
-            // The order matters: transform(serverOp, localChangesOp)
-            // We only care about the transformed server op to apply to the editor.
-            [editorOpToApply, this.bufferedOp] = TextOperation.transform(serverOp, this.bufferedOp);
-            this.addLog(`Transformed server op against dirty local changes. Resulting op: ${editorOpToApply}`);
-          } catch (e: any) {
-            this.addLog(`CRITICAL ERROR during transform (dirty): ${e.message}. Forcing pull.`);
-            this.pullChanges();
-            return;
-          }
-        }
-
-        // 4. Apply the final transformed server operation to the editor
-        try {
-          console.debug(`Attempting to apply op: ${editorOpToApply.toString()}`)
-          const newEditorContent = editorOpToApply.apply(currentEditorContent);
-          // Importantly, we don't want to trigger a local editor update, which would modify
-          // this.bufferedOp again.. setEditorValue() takes care of that by setting
-          // this.ignoreNextEditorChange = true and toggling it back to false after the change
-          // has been committed
-          this.setEditorValue(newEditorContent);
-          this.addLog(`Applied transformed server op (${editorOpToApply.toString()}) to editor.`);
-        } catch (e: any) {
-          this.addLog(`CRITICAL ERROR applying transformed server op to editor: ${e.message}. Forcing pull.`);
-          this.pullChanges();
-          return;
-        }
-
-
-        // 5. Update server revision
-        this.serverRevision = msg.revision;
-        this.localRevision = msg.revision; // Keep local aligned in manual mode after update
-
-        // Re-evaluate state: if outstandingOp still exists, we are still awaiting ACK.
-        // If not, and editor content matches syncedDoc, we are synchronized. Otherwise, dirty.
-        if (!this.outstandingOp) {
-          if (this.editor?.getValue() === this.syncedDoc) {
-            this.state = 'synchronized';
-          } else {
-            this.state = 'dirty';
-            this.addLog("Editor content still differs after update. State -> dirty.");
-          }
-        }
-
+        this.processServerUpdate(msg);
       });
 
       this.socket.on("history", (msg: ServerHistoryMsg) => {
@@ -444,6 +530,10 @@ function editorApp() {
         this.addLog(
           `Received history: ${msg.ops.length} ops (rev ${msg.startRevision} to ${msg.currentRevision})`,
         );
+
+        // Clear the update queue, as history should have brough client fully up-to-date.
+        this.addLog("Clearing any pending update queue due to received history.");
+        this.updateQueue = [];
 
         // This logic assumes the pull was requested because we were out of sync.
         // We need to apply these historical operations carefully.
