@@ -409,8 +409,22 @@ function editorApp() {
           // this.bufferedOp again.. setEditorValue() takes care of that by setting
           // this.ignoreNextEditorChange = true and toggling it back to false after the change
           // has been committed
-          this.setEditorValue(newEditorContent);
-          this.addLog(`Applied transformed server op (${editorOpToApply.toString()}) to editor.`);
+
+          // this.setEditorValue(newEditorContent);
+          // this.addLog(`Applied transformed server op (${editorOpToApply.toString()}) to editor.`);
+
+          // Preserve caret position
+          const oldCurIdx = positionToIndex(currentEditorContent.split("\n"), this.editor!.getCursorPosition());
+          const newCurIdx = serverOp.transformCursorIndex(oldCurIdx);
+
+          this.withNoLocalUpdate(() => {
+            // (re)write the text
+            this.editor!.setValue(newEditorContent, -1);
+            // Move caret to the transformed lcoation
+            const acePos = this.editor!.session.doc.indexToPosition(newCurIdx, 0);
+            this.editor!.selection.moveCursorToPosition(acePos);
+            this.editor!.clearSelection();  // we only support single point carets for now
+          })();
         } catch (e: any) {
           this.addLog(`CRITICAL ERROR applying transformed server op to editor: ${e.message}. Forcing pull.`);
           this.pullChanges();

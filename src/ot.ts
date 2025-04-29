@@ -579,4 +579,29 @@ export class TextOperation {
       })
       .join(", ");
   }
+
+  /**
+  * @param index - The current index of the cursor within the text.
+  * @returns the cursor index *after* `op` is applied.
+  */
+  transformCursorIndex(index: number): number {
+    let docPos = 0;
+    for (const c of this.ops) {
+      if (isRetain(c)) {
+        docPos += c;
+      } else if (isInsert(c)) {
+        if (docPos <= index) index += c.length;
+        // else, docPos stays the same because inserts sit *between* characters
+      } else { // delete
+        const len = -c;
+        if (index > docPos + len) {
+          index -= len; // deletion before cursor
+        } else if (index > docPos) {
+          index = docPos; // deletion covers cursor
+        }
+        // else, docPos is unchanged for deletion - deleted chunk disappears
+      }
+    }
+    return index
+  }
 }
