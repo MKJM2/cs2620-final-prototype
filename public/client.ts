@@ -1,6 +1,6 @@
 // public/client.ts
 import { io, Socket } from "socket.io-client";
-import { TextOperation } from "../src/ot"; // Adjust path
+import { TextOperation, isDelete, isInsert, isRetain } from "../src/ot"; // Adjust path
 import type {
   ServerInitialStateMsg,
   ServerAckMsg,
@@ -299,8 +299,24 @@ function editorApp() {
         // Its transformation against bufferedOp ensures it correctly modifies
         // the editor state which includes those buffered changes.
         const newEditorContent = serverOp.apply(currentEditorContent);
-        this.setEditorValue(newEditorContent); // Uses withNoLocalUpdate internally
-        this.addLog(`Applied transformed server op (${serverOp.toString()}) to editor.`);
+
+        // -- preserve caret ----------------------------------------------------------
+        const oldCurIdx  = positionToIndex(
+          currentEditorContent.split("\n"),
+          this.editor!.getCursorPosition()
+        );
+        const newCurIdx  = transformCursorIndex(oldCurIdx, serverOp);
+        // ---------------------------------------------------------------------------
+        
+        this.withNoLocalUpdate(() => {
+          // (re)write the text
+          this.editor!.setValue(newEditorContent, -1);
+        
+          // Move the caret to the transformed location
+          const acePos = this.editor!.session.doc.indexToPosition(newCurIdx, 0);
+          this.editor!.selection.moveCursorToPosition(acePos);
+          this.editor!.clearSelection();               // single-point caret, no range
+        })();
         // Update virtualDoc AFTER applying to editor to keep it consistent
         this.virtualDoc = this.editor!.getValue();
       } catch (e: any) {
@@ -782,6 +798,24 @@ function editorApp() {
   };
 }
 
+/** Returns the cursor index *after* `op` is applied. */
+function transformCursorIndex(index: number, op: TextOperation): number {
+  let docPos = 0;          // position in the *old* document
+  for (const c of op.ops) {
+    if (isRetain(c)) {                 // ----- retain N
+      docPos += c;
+    } else if (isInsert(c)) {          // ----- insert "abc"
+      if (docPos <= index) index += c.length;
+      // docPos stays the same because inserts sit *between* characters
+    } else {                           // ----- delete N   (c is negative)
+      const len = -c;
+      if (index > docPos + len)        index -= len;   // deletion before cursor
+      else if (index > docPos)         index  = docPos; // deletion covers cursor
+      // docPos is unchanged for deletions – the deleted chunk disappears
+    }
+  }
+  return index;
+}
 
 // Register with AlpineJS AFTER Alpine is initialized
 document.addEventListener('alpine:init', () => {
