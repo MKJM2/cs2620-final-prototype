@@ -448,7 +448,10 @@ function editorApp() {
 
         // If we are in 'dirty' state, there are local changes *not* included in outstandingOp.
         // We need to transform the serverOp against these implicit local changes.
-        if (this.state === 'dirty' && this.bufferedOp) {
+        if (this.bufferedOp) {
+          if (this.state !== 'dirty') {
+            console.warn(`bufferedOp: ${this.bufferedOp.toString()} exists yet state not dirty!`);
+          }
           try {
             // We transform the server op (already transformed against outstanding)
             // against the remaining local changes.
