@@ -76,7 +76,7 @@ function editorApp() {
     // --- State ---
     editor: null as AceAjax.Editor | null, // Ace editor instance
     socket: null as Socket | null,
-    serverUrl: "http://localhost:3000", // Default server URL
+    serverUrl: window.location.origin.substring(window.location.origin.indexOf(':') + 3), // Use hosting origin dynamically
     statusText: "Connecting...",
     isConnected: false,
     mode: "Automatic", // 'Manual' or 'Automatic'
@@ -111,6 +111,7 @@ function editorApp() {
     users: [] as UserInfo[], // List of all users connected to the same doc
     // UI State: which view to show in the right pane (preview or debug)
     viewMode: 'preview' as 'preview' | 'debug',
+    localUserId: '' as string,
 
     // Automatic Mode State management
     autoPushIntervalId: null as number | null, // Stores the interval ID
@@ -302,12 +303,13 @@ function editorApp() {
       this.socket.on("your_identity", (msg: ServerYourIdentityMsg) => {
         this.username = msg.user.username;
         this.addLog(`Server assigned username: ${this.username} (ID: ${msg.user.id})`);
+        this.localUserId = msg.user.id;
         // Note: We don't add ourselves to the 'users' list here,
         // 'current_users' will contain our info.
       });
 
       this.socket.on("current_users", (msg: ServerCurrentUsersMsg) => {
-        this.users = msg.users;
+        this.users = msg.users.map(u => ({ ...u, color: `hsl(${Math.random()*360},70%,50%)`}));
         this.addLog(`Received current user list (${this.users.length} users)`);
         // Sort users alphabetically for consistent display
         this.users.sort((a, b) => a.username.localeCompare(b.username));
@@ -316,7 +318,7 @@ function editorApp() {
       this.socket.on("user_joined", (msg: ServerUserJoinedMsg) => {
         // Avoid adding duplicates if messages arrive out of order
         if (!this.users.some(u => u.id === msg.user.id)) {
-          this.users.push(msg.user);
+          this.users.push({ ...msg.user, color: `hsl(${Math.random()*360},70%,50%)` });
           this.addLog(`User joined: ${msg.user.username} (ID: ${msg.user.id})`);
           // Re-sort
           this.users.sort((a, b) => a.username.localeCompare(b.username));
@@ -507,7 +509,7 @@ function editorApp() {
         // Re-evaluate state: if outstandingOp still exists, we are still awaiting ACK.
         // If not, and editor content matches syncedDoc, we are synchronized. Otherwise, dirty.
         if (!this.outstandingOp) {
-          if (this.editor?.getValue() === this.syncedDoc) {
+          if (this.editor!.getValue() === this.syncedDoc) {
             this.state = 'synchronized';
           } else {
             this.state = 'dirty';
@@ -533,7 +535,9 @@ function editorApp() {
         // but let's try applying the history for robustness.
 
         if (msg.startRevision !== this.serverRevision + 1) {
-          this.addLog(`Warning: History start revision ${msg.startRevision} doesn't match expected ${this.serverRevision + 1}. Resetting might be needed.`);
+          this.addLog(
+            `Warning: History start revision ${msg.startRevision} doesn't match expected ${this.serverRevision + 1}. Resetting might be needed.`,
+          );
           // Attempt to apply anyway, but this indicates potential issues.
         }
 

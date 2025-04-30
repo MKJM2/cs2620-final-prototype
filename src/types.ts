@@ -4,6 +4,7 @@ import { OperationComponent } from "./ot";
 export interface UserInfo {
   id: string; // Socket ID
   username: string;
+  color?: string;
 }
 
 

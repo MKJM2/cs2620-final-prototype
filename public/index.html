@@ -7,9 +7,6 @@
     <!-- Tailwind Play CDN Script -->
     <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
 
-    <!-- Flowbite CSS -->
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/flowbite/2.3.0/flowbite.min.css" rel="stylesheet" />
-
     <!-- KaTeX CSS -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.css" integrity="sha384-5TcZemv2l/9On385z///+d7MSYlvIEw9FuZTIdZ14vJLqWphw7e7ZPuOiCHJcFCP" crossorigin="anonymous">
 
@@ -50,46 +47,48 @@
     <!-- Main container managed by Alpine -->
     <div
       x-data="editorApp"
-      class="h-screen overflow-hidden"
+      class="h-screen w-full max-w-full overflow-y-hidden overflow-x-auto"
       x-init="console.log('Alpine init on editorApp div'); setTimeout(window.renderMarkdownPreview, 300)"  
       x-effect="virtualDoc; window.renderMarkdownPreview()" 
      > <!-- Prevent scrolling on body -->
-      <!-- New Structure using Tailwind and Flowbite -->
+      <!-- New Structure using Tailwind -->
       <div class="flex flex-col h-full bg-gray-100">
         <!-- 1. Header/Toolbar -->
         <header class="bg-white shadow p-2 flex justify-between items-center flex-shrink-0 z-10">
             <!-- View Mode and Server Info -->
             <div class="flex items-center space-x-4">
-              <!-- View Mode Tabs -->
-              <div class="inline-flex rounded-md shadow-sm" role="group">
-                <button type="button" @click="viewMode = 'preview'" :class="viewMode === 'preview' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-blue-600 border-blue-600'" class="px-2 py-1 text-xs font-medium border first:rounded-l-md last:rounded-r-md">Preview</button>
-                <button type="button" @click="viewMode = 'debug'" :class="viewMode === 'debug' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-blue-600 border-blue-600'" class="px-2 py-1 text-xs font-medium border first:rounded-l-md last:rounded-r-md">Debug</button>
-              </div>
               <!-- Server Info -->
               <div class="text-sm text-gray-700 space-x-2">
-                <span>Server: <strong x-text="serverUrl" class="font-semibold text-blue-600">N/A</strong></span>
-                <span>Status: <strong x-text="statusText" class="font-semibold">...</strong></span>
+                <span>Server status: 
+                  <strong x-text="statusText"
+                          :class="isConnected ? 'font-semibold text-green-600' : 'font-semibold text-gray-700'">
+                  </strong>
+                </span>
               </div>
             </div>
             <!-- User Avatars -->
             <div class="flex items-center space-x-1">
                  <template x-for="user in users" :key="user.id">
-                    <!-- Using Flowbite Tooltip -->
-                    <div x-data="{ tooltip: user.name }"
-                         :data-tooltip-target="'tooltip-user-' + user.id" 
-                         data-tooltip-placement="bottom"
-                         class="w-7 h-7 rounded-full text-white flex items-center justify-center text-xs font-bold cursor-default shadow"
-                         :style="`background-color: ${user.color || '#3B82F6'}`">
-                         <!-- Display first initial -->
-                         <span x-text="user.name ? user.name.substring(0, 1).toUpperCase() : '?'"></span>
-                    </div>
-                    <div :id="'tooltip-user-' + user.id" role="tooltip" class="absolute z-10 invisible inline-block px-3 py-2 text-sm font-medium text-white transition-opacity duration-300 bg-gray-900 rounded-lg shadow-sm opacity-0 tooltip dark:bg-gray-700">
-                        <span x-text="user.name">Anonymous User</span>
-                        <div class="tooltip-arrow" data-popper-arrow></div>
+                    <div class="relative inline-block" x-data="{ open: false }" @mouseenter="open = true" @mouseleave="open = false">
+                      <div class="w-7 h-7 rounded-full text-white flex items-center justify-center text-xs font-bold cursor-default shadow"
+                           :style="`background-color: ${user.color || '#3B82F6'}`">
+                        <span x-text="user.username ? user.username.split(' ').map(name => name.charAt(0).toUpperCase()).join('') : ''"></span>
+                      </div>
+                      <div x-show="open" x-transition.opacity class="absolute top-full mt-2 left-1/2  px-2 py-1 text-xs text-white bg-gray-900 rounded whitespace-nowrap z-20 pointer-events-none">
+                        <div class="flex flex-col items-center">
+                          <span x-text="user.username"></span>
+                          <span x-show="user.id === localUserId">(You)</span>
+                        </div>
+                      </div>
                     </div>
                  </template>
                  <span x-show="!users || users.length === 0" class="text-xs text-gray-500 italic ml-2">Just you</span>
             </div>
+              <!-- View Mode Tabs -->
+              <div class="inline-flex rounded-md shadow-sm" role="group">
+                <button type="button" @click="viewMode = 'preview'" :class="viewMode === 'preview' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-blue-600 border-blue-600'" class="px-2 py-1 text-xs font-medium border first:rounded-l-md last:rounded-r-md">Preview</button>
+                <button type="button" @click="viewMode = 'debug'" :class="viewMode === 'debug' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-blue-600 border-blue-600'" class="px-2 py-1 text-xs font-medium border first:rounded-l-md last:rounded-r-md">Debug</button>
+              </div>
         </header>
 
         <!-- 2. Main Content Area (Editor | Preview) -->
@@ -104,7 +103,6 @@
             <div class="w-full md:w-1/2 h-1/2 md:h-full flex flex-col bg-white overflow-hidden">
               <!-- Markdown Preview -->
               <div id="markdown-preview" x-show="viewMode === 'preview'" class="flex-grow p-4 overflow-y-auto prose lg:prose-base max-w-none">
-                <p x-show="!virtualDoc" class="text-gray-400 italic">Loading Preview...</p>
               </div>
               <!-- OT.js Debug Panel -->
               <div id="debug-panel" x-show="viewMode === 'debug'" class="flex-grow p-4 overflow-y-auto bg-gray-50 prose-sm font-mono text-xs text-gray-800">
@@ -127,9 +125,6 @@
 
     <!-- Client Bundle (created by Bun build or tsc) -->
     <script src="/public/client.js"></script>
-
-    <!-- Flowbite JS (needs to be loaded after Alpine potentially, and after elements exist) -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/flowbite/2.3.0/flowbite.min.js"></script>
 
     <!-- KaTeX JS (Core and Auto-render Extension) - Loaded before main script -->
     <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.js" integrity="sha384-cMkvdD8LoxVzGF/RPUKAcvmm49FQ0oxwDF3BGKtDXcEc+T1b2N+teh/OJfpU0jr6" crossorigin="anonymous"></script>
