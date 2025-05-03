@@ -46,3 +46,19 @@ Overwrites for tailwind typography / Marked.js defaults
     border: 1px solid #ddd;
     padding: 0.5em 1em;
   }
+
+  #markdown-preview.prose {
+    /* Override Tailwind Typography hr settings */
+    --tw-prose-hr-margin-block: 1rem;
+    --tw-prose-hr-border-width: 2px;
+    --tw-prose-hr-color: #e5e7eb;
+  }
+
+  #markdown-preview hr,
+  #markdown-preview .prose hr,
+  .prose #markdown-preview hr,
+  .prose hr {
+    margin: 1em 0 !important;
+    border-top-width: 2px !important;
+    border-color: #e5e7eb !important; /* Tailwind gray-200 */
+  }

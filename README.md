@@ -184,15 +184,10 @@ The tests in `src/ot.test.ts` verify the core properties and invariants of the `
 
 ## Limitations & Future Work
 
-*   **Manual Mode Only:** Collaboration requires explicit push/pull actions. Automatic mode is not implemented.
 *   **Basic Error Handling:** Error conditions (e.g., transform failures, out-of-order messages) are logged but recovery might require a full page refresh or server restart in edge cases.
-*   **No Persistence:** Document state is lost when the server restarts.
-*   **No User Presence:** No indication of other connected users or their cursor positions.
-*   **Scalability:** The current implementation is a prototype and hasn't been optimized for a large number of users or very large documents.
+*   **Scalability:** The current implementation is a prototype and hasn't been optimized for a large number of users or very large documents. Our OT implementation is relatively trivial and simplistic.
 *   **Potential Improvements:**
-    *   Implement automatic push/pull based on timers or idle detection.
-    *   Add user presence indicators and cursor awareness.
-    *   Integrate database persistence for documents and history.
-    *   Improve UI/UX (e.g., clearer state indicators, diff visualization).
     *   Implement more robust conflict resolution and error recovery strategies.
     *   Explore optimizations for large documents or high-frequency edits.
+    *   Add a permission system / ownership of documents to prevent unauthorized access and edits.
+    *   Add real-time cursor position indicators to show who is typing.

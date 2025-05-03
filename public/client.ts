@@ -14,7 +14,7 @@ import type {
   ServerCurrentUsersMsg,
   ServerUserJoinedMsg,
   ServerUserLeftMsg
-} from "../src/types"; // Adjust path
+} from "../src/types";
 
 // Make ace available globally if needed, or import types if using modules
 declare var ace: AceAjax.Ace | null;
@@ -261,8 +261,14 @@ function editorApp() {
     /** Initialize Socket.IO Connection */
     initSocketIO() {
       console.log("Initializing websocket connection...");
-      // this.socket = io(this.serverUrl);
-      this.socket = io({ transports: ['websocket'], upgrade: false });
+      // Determine document ID from path and include in handshake query
+      const pathParts = window.location.pathname.split('/').filter(p => p);
+      const docId = pathParts[0] === 'docs' && pathParts[1] ? pathParts[1] : '';
+      this.socket = io(window.location.origin, {
+        transports: ['websocket'],
+        upgrade: false,
+        query: { docId },
+      });
 
       this.socket.on("connect", () => {
         this.isConnected = true;

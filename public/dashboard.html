@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Document Dashboard</title>
+  <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
+  <link href="https://fonts.cdnfonts.com/css/latin-modern-math" rel="stylesheet">
+</head>
+<body class="bg-gray-50 min-h-screen flex items-center justify-center p-6">
+  <div class="w-full max-w-3xl bg-white p-8 rounded-2xl shadow-lg">
+    <h1 class="text-3xl font-extrabold text-gray-800 mb-6 text-center">
+      BLADE: Fast, Collaborative Markdown Editor <br>
+      with <span class="font-serif font-medium"> <i>Math Typesetting</i></span>
+    </h1>
+    <div class="space-y-4">
+      <button id="new-doc" class="block mx-auto py-3 px-5 rounded-lg bg-gradient-to-r from-blue-500 to-purple-500 hover:from-purple-500 hover:to-blue-500 text-white font-semibold shadow-lg transition transform hover:scale-105">Create New Document</button>
+      <div class="flex items-center my-4">
+        <hr class="flex-grow border-gray-300"/>
+        <span class="mx-2 text-gray-500 font-semibold">OR</span>
+        <hr class="flex-grow border-gray-300"/>
+      </div>
+      <form id="join-form" class="flex">
+        <input id="join-id" type="text" placeholder="Enter Doc ID" class="flex-grow border border-gray-300 rounded-l-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+        <button type="submit" class="px-4 py-2 bg-white border border-gray-300 rounded-r-lg hover:bg-gray-200 transition">Join Document</button>
+      </form>
+    </div>
+    <div class="mt-8">
+      <h2 class="text-xl font-semibold text-gray-800 mb-4">Recent Documents</h2>
+      <ul id="recent-list" class="space-y-3"></ul>
+    </div>
+    <hr class="my-6 flex-grow border-gray-300"/>
+    <p class="mt-6 text-sm text-gray-600 text-center">This project showcase was created for the final project of COMPSCI 2620. We extend our heartfelt thanks to the entire teaching staff for an amazing semester and for attending our SEAS design fair project showcase!</p>
+    <footer class="mt-4 text-center text-gray-500 text-sm">
+      Made with ❤️ in Cambridge, MA. <br/>
+      Authors: Michal Kurek & Natnael Teshome (Group 2)
+    </footer>
+  </div>
+  <script>
+    const STORAGE_KEY = 'recentDocs';
+    function getRecents() {
+      try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); } catch { return []; }
+    }
+    function saveRecents(arr) { localStorage.setItem(STORAGE_KEY, JSON.stringify(arr)); }
+    function addRecent(id, title) {
+      let recents = getRecents().filter(item => item.id !== id);
+      recents.unshift({ id, title });
+      if (recents.length > 5) recents = recents.slice(0,5);
+      saveRecents(recents);
+    }
+    function renderRecents() {
+      const list = document.getElementById('recent-list');
+      list.innerHTML = '';
+      const sh = { id: 'showcase', title: 'COMPSCI 2620: Final Project Showcase' };
+      const liSh = document.createElement('li');
+      liSh.className = 'p-4 bg-purple-50 rounded-lg hover:bg-purple-100 transition';
+      const aSh = document.createElement('a');
+      aSh.href = `/docs/${sh.id}`;
+      aSh.textContent = sh.title;
+      aSh.className = 'text-purple-700 font-bold';
+      liSh.appendChild(aSh);
+      list.appendChild(liSh);
+      const recents = getRecents();
+      recents.forEach(({ id, title }) => {
+        const li = document.createElement('li');
+        li.className = 'p-4 bg-white rounded-lg hover:shadow-md transition';
+        const a = document.createElement('a');
+        a.href = `/docs/${id}`;
+        a.textContent = title || id;
+        a.className = 'text-indigo-600 font-medium';
+        li.appendChild(a);
+        list.appendChild(li);
+      });
+    }
+    document.getElementById('new-doc').addEventListener('click', async () => {
+      const res = await fetch('/docs', { method: 'POST' });
+      const { id } = await res.json();
+      addRecent(id, id);
+      location.href = `/docs/${id}`;
+    });
+    document.getElementById('join-form').addEventListener('submit', e => {
+      e.preventDefault();
+      const id = document.getElementById('join-id').value.trim();
+      if (id) {
+        addRecent(id, id);
+        location.href = `/docs/${id}`;
+      }
+    });
+    renderRecents();
+  </script>
+</body>
+</html>

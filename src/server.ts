@@ -21,6 +21,7 @@ import type {
   ServerUserLeftMsg
 } from "./types";
 import { Socket } from "socket.io";
+import { randomUUID } from "crypto";
 
 // Get __dirname for ESM
 const __filename = fileURLToPath(import.meta.url);
@@ -46,11 +47,55 @@ function generateFunnyName(): string {
   return `${adj} ${animal}`;
 }
 
-// --- OT Server State ---
-let documentState = "";
-let currentRevision = 0;
-// History of applied operations (each op takes state from rev n to rev n+1)
-const operationHistory: TextOperation[] = [];
+// --- Multi-document state ---
+type DocumentData = { content: string; revision: number; history: TextOperation[] };
+const documents = new Map<string, DocumentData>();
+// Prepopulate default showcase document
+const showcaseId = "showcase";
+const showcaseContent = `# COMPSCI 2620: Final Project Showcase
+
+Welcome to **BLADE** — a fast, collaborative Markdown editor with real-time _math typesetting_! 🚀
+
+---
+
+## Features at a Glance
+- **Live Collaboration**: Edit documents together in real time
+- **Markdown**: _Italics_, **bold**, \`inline code\`, lists, links, and more
+- **Math Support**: Beautiful LaTeX equations, inline and block
+- [Links! E.g., click here to visit this project's landing page](/)
+- Numbered list:
+  1. First item
+  2. Second item
+
+---
+
+## Math Typesetting Power
+
+Inline math: $\\displaystyle \\lim_{x \\to 0} \\frac{\\sin x}{x} = 1$
+
+Block math:
+
+$$
+\\int_{-\\infty}^{\\infty} e^{-x^2} \\, dx = \\sqrt{\\pi}
+$$
+
+And the **Navier–Stokes equation** (incompressible flow):
+
+$$
+\\frac{\\partial \\mathbf{u}}{\\partial t} + (\\mathbf{u} \\cdot \\nabla) \\mathbf{u} = -\\nabla p + \\nu \\nabla^2 \\mathbf{u} + \\mathbf{f}
+$$
+
+---
+
+### About This Project
+
+This project was created for the final project of **COMPSCI 2620** (taught by Jim Waldo).
+
+**Authors:** Michal Kurek & Natnael Teshome (Group 2)
+
+We extend our heartfelt thanks to the entire teaching staff for an amazing semester and for supporting us during the SEAS Design Fair!
+`;
+documents.set(showcaseId, { content: showcaseContent, revision: 0, history: [] });
 
 // -- User Presence State ---
 const connectedUsers = new Map<string, UserInfo>();
@@ -77,13 +122,33 @@ app.register(fastifyStatic, {
   prefix: "/public", // e.g. /public/client.js, /public/style.css, etc.
 });
 
-// Serve index.html at the root path.
+// Serve dashboard at root.
 app.get("/", (_req, reply) => {
+  reply.sendFile("dashboard.html");
+});
+
+// Serve editor shell for a specific document.
+app.get("/docs/:docId", (req, reply) => {
   reply.sendFile("index.html");
+});
+
+// Create a new document.
+app.post("/docs", async (req, reply) => {
+  const docId = randomUUID();
+  documents.set(docId, { content: "", revision: 0, history: [] });
+  reply.code(201).send({ id: docId });
 });
 
 app.ready().then(() => {
   app.io.on("connection", (socket: Socket) => {
+    // Determine document ID from handshake and join room
+    const raw = socket.handshake.query.docId;
+    console.log(`Client ${socket.id} attempting to connect to document ${raw}. Checking if document exists...`)
+    const docId = typeof raw === "string" && documents.has(raw) ? raw : showcaseId;
+    socket.join(docId);
+    const doc = documents.get(docId)!;
+    console.log(`Client ${socket.id} connected to document ${docId}`);
+
     console.log(`Client connected: ${socket.id}`);
 
     // --- User Presence Handling ---
@@ -112,11 +177,11 @@ app.ready().then(() => {
 
     // 4a. Send the initial document state.
     const initialStateMsg: ServerInitialStateMsg = {
-      doc: documentState,
-      revision: currentRevision,
+      doc: doc.content,
+      revision: doc.revision,
     };
     socket.emit("initial_state", initialStateMsg);
-    console.log(`Sent initial state (rev ${currentRevision}) to ${socket.id}`);
+    console.log(`Sent initial state (rev ${doc.revision}) to ${socket.id}`);
 
     // 4b. Handle client 'push' events.
     socket.on("push", (msg: ClientPushMsg) => {
@@ -127,19 +192,19 @@ app.ready().then(() => {
         const clientOp = TextOperation.fromJSON(msg.op);
         const clientRevision = msg.revision;
 
-        if (clientRevision < 0 || clientRevision > currentRevision) {
+        if (clientRevision < 0 || clientRevision > doc.revision) {
           console.error(
-            `Invalid revision ${clientRevision} from ${socket.id}. Server revision is ${currentRevision}.`
+            `Invalid revision ${clientRevision} from ${socket.id}. Server revision is ${doc.revision}.`
           );
           const errorMsg: ServerErrorMsg = {
-            message: `Invalid revision ${clientRevision}. Server is at ${currentRevision}. Please pull.`,
+            message: `Invalid revision ${clientRevision}. Server is at ${doc.revision}. Please pull.`,
           };
           socket.emit("error", errorMsg);
           return;
         }
 
         // Transform client's op against concurrent operations.
-        const concurrentOps = operationHistory.slice(clientRevision);
+        const concurrentOps = doc.history.slice(clientRevision);
         let transformedClientOp = clientOp;
         for (const historicalOp of concurrentOps) {
           if (
@@ -164,25 +229,25 @@ app.ready().then(() => {
         console.log(
           `Applying transformed op from ${socket.id}: ${transformedClientOp.toString()}`
         );
-        documentState = transformedClientOp.apply(documentState);
-        currentRevision++;
-        operationHistory.push(transformedClientOp);
+        doc.content = transformedClientOp.apply(doc.content);
+        doc.revision++;
+        doc.history.push(transformedClientOp);
 
         // ACK back to the originator.
-        const ackMsg: ServerAckMsg = { revision: currentRevision };
+        const ackMsg: ServerAckMsg = { revision: doc.revision };
         socket.emit("ack", ackMsg);
         console.log(
-          `Sent ack (new rev ${currentRevision}) to ${socket.id}`
+          `Sent ack (new rev ${doc.revision}) to ${socket.id}`
         );
 
         // Broadcast update to all other clients.
         const updateMsg: ServerUpdateMsg = {
-          revision: currentRevision,
+          revision: doc.revision,
           op: transformedClientOp.toJSON(),
         };
-        socket.broadcast.emit("update", updateMsg);
+        socket.to(docId).emit("update", updateMsg);
         console.log(
-          `Broadcast update (rev ${currentRevision}) to other clients`
+          `Broadcast update (rev ${doc.revision}) to other clients`
         );
       } catch (error: any) {
         console.error(
@@ -205,17 +270,17 @@ app.ready().then(() => {
       );
       const clientRevision = msg.revision;
 
-      if (clientRevision < 0 || clientRevision > currentRevision) {
+      if (clientRevision < 0 || clientRevision > doc.revision) {
         console.error(
           `Invalid revision ${clientRevision} in pull request from ${socket.id}. ` +
-          `Server revision is ${currentRevision}. Sending full history.`
+          `Server revision is ${doc.revision}. Sending full history.`
         );
-        const historyToSend = operationHistory.map((op) => op.toJSON());
+        const historyToSend = doc.history.map((op) => op.toJSON());
         const historyMsg: ServerHistoryMsg = {
           startRevision: 1,
           ops: historyToSend,
-          currentRevision: currentRevision,
-          currentDocState: documentState,
+          currentRevision: doc.revision,
+          currentDocState: doc.content,
         };
         socket.emit("history", historyMsg);
         console.warn(
@@ -224,19 +289,19 @@ app.ready().then(() => {
         return;
       }
 
-      const opsToSend = operationHistory
+      const opsToSend = doc.history
         .slice(clientRevision)
         .map((op) => op.toJSON());
 
       const historyMsg: ServerHistoryMsg = {
         startRevision: clientRevision + 1,
         ops: opsToSend,
-        currentRevision: currentRevision,
-        currentDocState: documentState,
+        currentRevision: doc.revision,
+        currentDocState: doc.content,
       };
       socket.emit("history", historyMsg);
       console.log(
-        `Sent ${opsToSend.length} ops (rev ${clientRevision + 1} to ${currentRevision}) to ${socket.id}`
+        `Sent ${opsToSend.length} ops (rev ${clientRevision + 1} to ${doc.revision}) to ${socket.id}`
       );
     });
 

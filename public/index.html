@@ -15,7 +15,7 @@
                 
 
     <!-- Styles -->
-    <link rel="stylesheet" href="public/styles.css">
+    <link rel="stylesheet" href="/public/styles.css">
 
     <!-- Ace Editor -->
     <script
@@ -51,21 +51,24 @@
       x-init="console.log('Alpine init on editorApp div'); setTimeout(window.renderMarkdownPreview, 300)"  
       x-effect="virtualDoc; window.renderMarkdownPreview()" 
      > <!-- Prevent scrolling on body -->
-      <!-- New Structure using Tailwind -->
       <div class="flex flex-col h-full bg-gray-100">
         <!-- 1. Header/Toolbar -->
         <header class="bg-white shadow p-2 flex justify-between items-center flex-shrink-0 z-10">
-            <!-- View Mode and Server Info -->
-            <div class="flex items-center space-x-4">
-              <!-- Server Info -->
-              <div class="text-sm text-gray-700 space-x-2">
-                <span>Server status: 
-                  <strong x-text="statusText"
-                          :class="isConnected ? 'font-semibold text-green-600' : 'font-semibold text-gray-700'">
-                  </strong>
-                </span>
-              </div>
+          <div class="flex items-center space-x-4">
+            <a href="/" class="text-gray-700 hover:text-gray-900 hover:underline flex items-center space-x-1">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+              </svg>
+            </a>
+            <div class="text-sm text-gray-700 space-x-2">
+              <span>Server status: 
+                <strong x-text="statusText"
+                        :class="isConnected ? 'font-semibold text-green-600' : 'font-semibold text-gray-700'">
+                </strong>
+              </span>
             </div>
+          </div>
+          <div class="flex items-center space-x-4">
             <!-- User Avatars -->
             <div class="flex items-center space-x-1">
                  <template x-for="user in users" :key="user.id">
@@ -84,11 +87,12 @@
                  </template>
                  <span x-show="!users || users.length === 0" class="text-xs text-gray-500 italic ml-2">Just you</span>
             </div>
-              <!-- View Mode Tabs -->
-              <div class="inline-flex rounded-md shadow-sm" role="group">
-                <button type="button" @click="viewMode = 'preview'" :class="viewMode === 'preview' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-blue-600 border-blue-600'" class="px-2 py-1 text-xs font-medium border first:rounded-l-md last:rounded-r-md">Preview</button>
-                <button type="button" @click="viewMode = 'debug'" :class="viewMode === 'debug' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-blue-600 border-blue-600'" class="px-2 py-1 text-xs font-medium border first:rounded-l-md last:rounded-r-md">Debug</button>
-              </div>
+            <!-- View Mode Tabs -->
+            <div class="inline-flex rounded-md shadow-sm" role="group">
+              <button type="button" @click="viewMode = 'preview'" :class="viewMode === 'preview' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-blue-600 border-blue-600'" class="px-2 py-1 text-xs font-medium border first:rounded-l-md last:rounded-r-md">Preview</button>
+              <button type="button" @click="viewMode = 'debug'" :class="viewMode === 'debug' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-blue-600 border-blue-600'" class="px-2 py-1 text-xs font-medium border first:rounded-l-md last:rounded-r-md">Debug</button>
+            </div>
+          </div>
         </header>
 
         <!-- 2. Main Content Area (Editor | Preview) -->
