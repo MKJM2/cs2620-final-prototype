@@ -1,0 +1,176 @@
+# We provide this configuration as a representative example of the Nginx server block
+# set up to proxy requests to our local service and enforce HTTPS redirection.
+#
+# To keep our server hosting this CS2620 Project secure, we use HTTPS for all traffic.
+# We use a custom load balancing algorithm based on the hash of the request URI (document path).
+# This allows us to distribute requests across multiple backend application servers
+# while ensuring that requests for the same URI are consistently routed to the same backend server.
+#
+# =========================================================================================
+# NOTE THAT THIS IS A CONFIGURATION EXAMPLE ONLY. WE KEEP THE ACTUAL CONFIGURATION
+# /w FILE PATHS AND PRIVATE KEYS CONFIDENTIAL ON OUR SERVER.
+# =========================================================================================
+#
+# This configuration utilizes the ngx_http_lua_module for custom hash-based load balancing.
+# We require Nginx to be compiled with this module. On Debian-based systems,
+# this might be provided by packages like:
+# - [libnginx-mod-http-lua](https://packages.debian.org/sid/libnginx-mod-http-lua)
+# - Or included in a meta-package like [nginx-extras](https://packages.debian.org/buster/nginx-extras)
+#
+# !!! SECURITY WARNING !!!
+# We DO NOT include actual file paths for SSL certificates and private keys
+# in our public repository. These paths and the key files themselves are
+# kept confidential on our server.
+
+# We define the pool of our backend application servers.
+# These are assumed to be listening on localhost ports 3000 through 3000+n-1.
+# We will use Lua code to select the specific backend server based on the request URI hash.
+upstream lua_backend_nodes {
+    # We define each of our backend servers here.
+    # For this example, we show 3 nodes (ports 3000, 3001, 3002).
+
+    # We include 'max_fails' and 'fail_timeout' on each server entry.
+    # These parameters enable Nginx's passive health checks. If a server fails
+    # 'max_fails' times within the 'fail_timeout' duration, Nginx will temporarily
+    # mark it as down. Our Lua code will attempt to select a peer, and Nginx will
+    # handle the failover based on its internal server state and the
+    # proxy_next_upstream directives in the location block.
+    server localhost:3000 max_fails=3 fail_timeout=30s;
+    server localhost:3001 max_fails=3 fail_timeout=30s;
+    server localhost:3002 max_fails=3 fail_timeout=30s;
+
+    # We implement our custom load balancing logic using Lua code directly within
+    # the balancer_by_lua_block directive. This block is executed for each request
+    # before Nginx attempts to connect to an upstream server.
+    balancer_by_lua_block {
+        -- We get the requested URI from the Nginx variable.
+        local uri = ngx.var.request_uri;
+
+        -- We define a list of our backend servers addresses in a Lua table.
+        -- IMPORTANT: The number and order of server addresses in this Lua table
+        -- MUST exactly match the 'server' directives defined above in this
+        -- 'upstream' block. In a more dynamic production system, we would e.g.,
+        -- populate this list from a configuration file read at startup or
+        -- using a shared memory zone to handle changes without Nginx reloads.
+        -- However, for the sake of our CS2620 MVP prototype, we keep it simple:
+        local backend_servers = {
+            "localhost:3000",
+            "localhost:3001",
+            "localhost:3002"
+        };
+
+        -- We determine the total number of backend servers available from our list.
+        local num_backends = #backend_servers;
+
+        -- We calculate a hash based on the request URI string and ensure the
+        -- hash result is an integer.
+        local hash = 5381;
+        for i = 1, #uri do
+            hash = bit.bxor(hash * 33, string.byte(uri, i));
+        end
+
+        -- Lua numbers can be negative after bitwise operations.
+        -- The ngx.balancer.set_current_peer function expects a non-negative 0-based index.
+        -- We use math.abs() to ensure our hash is non-negative before applying modulo.
+        -- The modulo operation maps the hash value to an index within the range [0, num_backends - 1].
+        local peer_index = math.abs(hash) % num_backends;
+
+        -- For debugging purposes, we log the URI, calculated hash, and the selected peer index.
+        -- ngx.log(ngx.INFO, "URI: ", uri, ", Calculated Hash: ", hash, ", Selected Peer Index: ", peer_index);
+
+        -- We instruct Nginx to use the backend server at the calculated index.
+        -- Nginx manages the list of servers and their internal state (up/down) based on
+        -- the 'server' directives and passive health checks we configured.
+        local ok, err = ngx.balancer.set_current_peer(peer_index);
+
+        -- If setting the peer fails for some reason (e.g., invalid index returned),
+        -- we log an error and return an HTTP 500 error to the client
+        -- to prevent a dangling request or incorrect routing.
+        if not ok then
+            ngx.log(ngx.ERR, "failed to set current peer based on hash: ", err);
+            -- We return an internal server error status.
+            return ngx.exit(ngx.HTTP_INTERNAL_SERVER_ERROR);
+        end
+
+        -- Nginx will now proceed to attempt to connect to the selected peer.
+        -- If that peer is marked down by passive health checks or fails the request
+        -- according to the proxy_next_upstream rules configured in the location block,
+        -- Nginx will then try another available peer!
+    }
+}
+
+# We configure our primary server block to handle incoming requests from clients.
+server {
+    # You'd replace 'your_domain.com' and 'www.your_domain.com'
+    # with your actual domain names when deploying this configuration.
+    server_name your_domain.com www.your_domain.com;
+
+    # We define the location block that will proxy requests to our backend nodes.
+    location / {
+        # We proxy requests to our Lua-controlled upstream group defined above.
+        # Our Lua code in the upstream block determines which specific peer
+        # receives the request for a given URI.
+        proxy_pass http://lua_backend_nodes;
+
+        # We set standard proxy headers to pass client information to the backend servers.
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_http_version 1.1; # We specify HTTP/1.1 for features like WebSockets
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade"; # This is important for WebSocket connections
+        proxy_cache off;
+
+        # We configure Nginx's behavior when a request to a selected upstream peer fails.
+        # Nginx will automatically try the next available peer (based on its internal
+        # health status and our upstream definition) if the initial attempt results
+        # in one of the specified errors or timeouts. This works in conjunction
+        # with the max_fails/fail_timeout settings on the individual servers in the upstream.
+        proxy_next_upstream error timeout http_500 http_502 http_503 http_504;
+        # We limit the total number of different upstream servers Nginx will try
+        # for a single client request before giving up and returning an error to the client.
+        proxy_next_upstream_tries 3;
+        # We set a cumulative timeout for the entire process of trying upstream servers
+        # for a single request. If the retries take longer than this, Nginx will abort.
+        proxy_next_upstream_timeout 10s;
+    }
+
+    # We include the 'listen 443 ssl;' directive to instruct Nginx to listen for HTTPS traffic
+    # on the standard port 443.
+    # !!! SECURITY WARNING !!!
+    # We must configure the actual file paths to our SSL certificate and key
+    # directly on our server where these files are stored. These paths and the
+    # private key files themselves MUST be kept confidential and we MUST NOT expose
+    # them in public repositories. We use placeholder paths in this example.
+    listen 443 ssl; # We manage this directive primarily to enable HTTPS
+    ssl_certificate /path/to/your/fullchain.pem; # <-- We REPLACE this with the actual path on our server (We KEEP this PRIVATE)
+    ssl_certificate_key /path/to/your/privkey.pem; # <-- We REPLACE this with the actual path on our server (We KEEP this PRIVATE)
+
+    # We might include or reference our SSL options and Diffie-Hellman parameters configuration here.
+    # The specific include paths may vary or be handled differently depending on the tool
+    # we use for SSL certificate management (e.g., Certbot automatically manages these).
+    # We might consider templating or omitting these specific paths in a public repository
+    # as they can reveal details about the server's setup.
+    # include /path/to/your/options-ssl-nginx.conf; # <-- We REPLACE this with the actual path (We KEEP this PRIVATE)
+    # ssl_dhparam /path/to/your/ssl-dhparams.pem; # <-- We REPLACE this with the actual path (We KEEP this PRIVATE)
+
+    # These directives might be automatically generated and managed by a tool like Certbot;
+    # we note this possibility as context.
+    # include /etc/letsencrypt/options-ssl-nginx.conf;
+    # ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+}
+
+# We use this separate server block to listen for unencrypted HTTP traffic
+# on the standard port 80 and issue a permanent redirect (301) to the
+# corresponding HTTPS version of the requested URL.
+server {
+    # We check if the requested host matches our primary domain.
+    # TODO: You will need to replace 'your_domain.com' with your actual domain name here as well.
+    if ($host = your_domain.com) {
+        return 301 https://$host$request_uri;
+    } # We note that this conditional redirect block might be managed by Certbot.
+
+    listen 80; # We listen on the standard HTTP port
+    server_name your_domain.com; # You will need to replace this with your actual domain name
+    return 301 https://$host$request_uri; # We issue a 301 redirect to the HTTPS version using the original host and URI
+}
