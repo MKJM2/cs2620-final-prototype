@@ -1,40 +1,63 @@
-# Collaborative Markdown Editor (OT Prototype)
+# BLADE: Fast, Collaborative Markdown Editor with Math Typesetting (OT Prototype)
 
-This project implements a basic real-time collaborative Markdown editor using Operational Transformation (OT). It features a client-server architecture where text changes are synchronized between multiple users via WebSockets.
+**Live Demo: [Click Here!](https://www.michalkurek.com)**
+
+This project implements a basic real-time collaborative Markdown editor using Operational Transformation (OT). It features a client-server architecture where text changes are synchronized between multiple users via WebSockets. A central server maintains the authoritative document state and manages operation history. The editor also supports LaTeX-style math typesetting within the Markdown preview.
+
+![Dashboard IMG](./static/dashboard.jpeg)
+
+![Editor IMG](./static/editor.jpeg)
 
 ## Features
 
-*   **Operational Transformation:** Core OT logic (`apply`, `invert`, `compose`, `transform`) for text manipulation.
-*   **Client-Server Architecture:** Uses Socket.IO for WebSocket communication between a central server and multiple clients.
-*   **Revision Tracking:** Server maintains a linear history of operations and document revisions.
-*   **Manual Synchronization:** Clients currently use explicit "Push" and "Pull" actions to send and receive changes.
+*   **Operational Transformation:** Core OT logic (`apply`, `invert`, `compose`, `transform`) for text manipulation, ensuring eventual consistency.
+*   **Client-Server Architecture:** Uses Socket.IO for WebSocket communication.
+*   **Multi-Document Support:** Create and join separate collaborative document sessions.
+*   **Revision Tracking:** Server maintains a linear history of operations for each document.
+*   **Automatic Synchronization:** Clients automatically push changes and integrate incoming updates in near real-time using the OT algorithm. Manual pull/push options are also present for debugging or manual control.
 *   **Basic Editor UI:** Uses Ace Editor for text input and Alpine.js for simple UI state management.
+*   **Markdown Preview with Math:** Renders Markdown with support for LaTeX-style math via KaTeX and Marked.js.
+*   **User Presence:** Shows connected users for a given document with unique colors and names.
+*   **Persistence:** Document state and history are persisted using Redis.
 *   **TypeScript:** Entire codebase (client and server) written in TypeScript.
 *   **Testing:** Includes unit tests for the core OT logic using Vitest.
 
+## Distributed System Strategy
+
+To handle multiple documents and scale the server, we employ a distributed system strategy. The core idea is to ensure that for any given document, all connected clients communicate with a single server node that holds the authoritative "ground truth" state for that document. This prevents complex distributed state management logic for individual documents and simplifies the OT transformation process, as concurrent operations for a single document are always processed sequentially on the same node.
+
+This is achieved using an Nginx reverse proxy configured as a load balancer. Nginx sits in front of multiple backend application server nodes (running the `src/server.ts` Bun application). The Nginx configuration (which is redacted here for security reasons, but representative of our deployed setup) utilizes Lua scripting within the Nginx request handling.
+
+When a client initiates a WebSocket connection to a specific document ID (e.g., `/docs/some-doc-id`), the Nginx Lua script extracts the document ID from the request URL. It then uses this document ID as a key to consistently hash and direct the client's connection to a specific backend server node. This ensures that all clients connecting to the *same* document ID are routed to the *same* backend node.
+
+Nginx also performs health checks ("heartbeats") against the backend nodes. If a backend node is detected as unhealthy, Nginx will stop routing new connections to it. Existing connections on the unhealthy node will eventually drop, and clients will attempt to reconnect, being routed to an active node (potentially a different one for that document ID if the original node remains down).
+
+For persistent storage of document state and history, we utilize a Redis Cluster. Each document's data (content, revision, history) is stored under a key namespaced by its document ID (e.g., `doc:some-doc-id`). This allows the server nodes to load and save document state as needed, and the Redis Cluster handles data distribution and failover.
+
 ## Technology Stack
 
-*   **Backend:** Bun, TypeScript, Socket.IO
-*   **Frontend:** TypeScript, Ace Editor, Alpine.js, Socket.IO Client
+*   **Backend:** Bun, TypeScript, Fastify, Socket.IO, Redis, Nginx
+*   **Frontend:** TypeScript, Ace Editor, Alpine.js, Socket.IO Client, Marked.js, KaTeX
 *   **Testing:** Vitest
-*   **Build:** Bun
+*   **Build:** Bun, concurrently
 
 ## Project Structure
 
 ```
 ./
 ├── src/
-│   ├── types.ts       # Shared TypeScript types for client/server messages
+│   ├── types.ts       # Shared TypeScript types for client/server messages and user info
 │   ├── ot.ts          # Core Operational Transformation logic (TextOperation class)
-│   ├── server.ts      # Socket.IO server implementation
+│   ├── server.ts      # Fastify and Socket.IO server implementation, document management, persistence
 │   └── ot.test.ts     # Unit tests for ot.ts
 ├── public/
 │   ├── style.css      # Basic styling for the editor page
-│   ├── index.html     # Main HTML structure
-│   ├── client.js      # Bundled JavaScript client code (output of build)
+│   ├── index.html     # Main HTML structure for the editor
+│   ├── dashboard.html # HTML structure for the document dashboard
 │   └── client.ts      # Client-side TypeScript logic (Ace integration, OT state machine, Socket.IO handling)
 ├── package.json     # Project dependencies and scripts
-└── tsconfig.json    # TypeScript configuration
+├── tsconfig.json    # TypeScript configuration
+└── README.md        # This file
 ```
 
 ## Core Concepts
@@ -65,30 +88,38 @@ Communication relies on a defined set of messages:
     *   `ServerInitialStateMsg`: Sent on connection, providing the full document (`doc`) and current `revision`.
     *   `ServerAckMsg`: Acknowledges a successful `ClientPushMsg`, returning the new server `revision`.
     *   `ServerUpdateMsg`: Broadcasts an operation (`op`) applied on the server, tagged with its `revision`.
-    *   `ServerHistoryMsg`: Sends a list of operations (`ops`) in response to a `ClientPullMsg`.
+    *   `ServerHistoryMsg`: Sends a list of operations (`ops`) in response to a `ClientPullMsg`, along with the current document state.
+    *   `ServerErrorMsg`: Indicates an error occurred on the server.
+    *   `ServerYourIdentityMsg`: Sends the client their assigned user information.
+    *   `ServerCurrentUsersMsg`: Sends a list of all users currently connected to the document.
+    *   `ServerUserJoinedMsg`: Broadcasts when a new user joins the document.
+    *   `ServerUserLeftMsg`: Broadcasts when a user leaves the document.
 
 ### Server State (`src/server.ts`)
 
-The server maintains:
+The server manages state for each document:
 
-*   `documentState`: The current authoritative version of the document.
-*   `currentRevision`: The revision number corresponding to `documentState`.
-*   `operationHistory`: An array storing the `TextOperation` objects that transform revision `i` to `i+1`.
+*   `content`: The current authoritative version of the document string.
+*   `revision`: The revision number corresponding to the current `content`.
+*   `history`: An array storing the `TextOperation` objects that transform revision `i` to `i+1`.
+*   **Persistence:** Uses Redis to store and retrieve document `content`, `revision`, and `history`.
 
-When receiving a `ClientPushMsg`, the server transforms the client's operation against any concurrent operations in `operationHistory` before applying it and broadcasting an `ServerUpdateMsg`.
+When receiving a `ClientPushMsg`, the server transforms the client's operation against any concurrent operations in the document's `history` before applying it, incrementing the revision, adding the transformed operation to `history`, and broadcasting an `ServerUpdateMsg` to other clients.
 
 ### Client State (`public/client.ts`)
 
 The client manages its state relative to the server:
 
-*   `syncedDoc`: The document state corresponding to `serverRevision`.
-*   `virtualDoc`: `syncedDoc` plus any local, unpushed changes (`bufferedOp`). Used as the base for generating new local operations.
+*   `syncedDoc`: The document state corresponding to `serverRevision`. This is the last known state confirmed by the server.
+*   `virtualDoc`: `syncedDoc` plus any local, unpushed changes (`bufferedOp`). This is the state displayed in the editor and used as the base for generating new local operations.
 *   `serverRevision`: The latest revision known to the client (updated via ACK, Update, History).
-*   `state`: Tracks the client's synchronization status (`synchronized`, `dirty`, `awaitingPush`, `awaitingPull`).
+*   `state`: Tracks the client's synchronization status (`initializing`, `synchronized`, `dirty`, `awaitingPush`, `awaitingPull`).
 *   `outstandingOp`: An operation sent to the server, awaiting acknowledgment (`ServerAckMsg`).
-*   `bufferedOp`: Local changes made since the last sync, composed into a single operation, not yet pushed.
+*   `bufferedOp`: Local changes made since the last push/pull, composed into a single operation, not yet pushed.
+*   `username`: The username assigned by the server.
+*   `users`: A list of other users currently connected to the same document.
 
-The client uses `transform` to integrate incoming `ServerUpdateMsg` operations with its local `outstandingOp` and `bufferedOp` to maintain consistency.
+The client uses `transform` to integrate incoming `ServerUpdateMsg` operations with its local `outstandingOp` and `bufferedOp` to maintain consistency. Local edits are composed into `bufferedOp` and the `virtualDoc` is updated immediately to provide a responsive editing experience. In "Automatic" mode (default), the client periodically pushes `bufferedOp` if changes exist.
 
 ## Setup and Running
 
@@ -113,7 +144,7 @@ bun run build:client
 
 **Running the Server:**
 
-*   For development (with auto-reloading):
+*   For development (with auto-reloading for server and client):
     ```bash
     bun run dev
     ```
@@ -126,7 +157,7 @@ The server will start, typically on `http://localhost:3000`.
 
 **Accessing the Application:**
 
-Open your web browser and navigate to `http://localhost:3000`. Open multiple tabs or browsers to simulate collaboration.
+Open your web browser and navigate to `http://localhost:3000`. From the dashboard, you can create a new document or join an existing one by ID. Open multiple tabs or browsers to simulate collaboration.
 
 ## Testing
 
@@ -138,57 +169,61 @@ bun test
 
 The tests in `src/ot.test.ts` verify the core properties and invariants of the `TextOperation` class methods (`apply`, `invert`, `compose`, `transform`).
 
-## How It Works (Manual Mode)
+## How It Works (Automatic Mode)
 
-1.  **Connect:** Client connects via WebSocket. Server sends `ServerInitialStateMsg`. Client loads the document and sets its state to `synchronized`.
-2.  **Local Edit:** User types in the editor. The `change` event triggers `handleLocalDelta`, which converts the Ace delta into a `TextOperation` and composes it into `bufferedOp`. State becomes `dirty`. `virtualDoc` is updated.
-3.  **Push:** User clicks "Push Changes".
-    *   If `bufferedOp` exists, it's moved to `outstandingOp`.
+1.  **Connect:** Client connects via WebSocket to a specific document ID. Server assigns a username, sends `ServerYourIdentityMsg`, `ServerCurrentUsersMsg`, and `ServerInitialStateMsg` with the document's current state and revision. Client loads the document into the editor, updates its state (`syncedDoc`, `virtualDoc`, `serverRevision`), sets state to `synchronized`, and enables the editor.
+2.  **Local Edit:** User types in the editor. Ace editor's `change` event triggers `handleLocalDelta`, which converts the Ace delta into a `TextOperation`. This operation is composed (`compose`) with any existing `bufferedOp`. The `virtualDoc` is updated immediately by applying the new operation to it. State becomes `dirty` if it wasn't already `awaitingPush`.
+3.  **Automatic Push:** A timer (`autoPushTask`) periodically checks if the client is connected, in Automatic mode, and has a non-empty `bufferedOp`. If so:
+    *   The current `bufferedOp` is moved to `outstandingOp`.
     *   `bufferedOp` is cleared.
     *   State becomes `awaitingPush`.
-    *   `ClientPushMsg` containing `outstandingOp` and `serverRevision` is sent.
+    *   A `ClientPushMsg` containing `outstandingOp` and `serverRevision` (the revision the outstandingOp is based on) is sent to the server.
 4.  **Server Receives Push:**
-    *   Server retrieves operations from `operationHistory` that occurred after the client's `revision`.
-    *   Server transforms the incoming client operation against these historical operations using `TextOperation.transform`.
-    *   The transformed operation is applied to the server's `documentState`.
-    *   The transformed operation is added to `operationHistory`.
-    *   `currentRevision` is incremented.
-    *   `ServerAckMsg` is sent back to the originating client.
-    *   `ServerUpdateMsg` containing the *transformed* operation is broadcast to all *other* clients.
+    *   Server validates the client's `revision` against its own. If invalid, sends `ServerErrorMsg`.
+    *   Server retrieves operations from the document's `history` that occurred after the client's reported `revision`.
+    *   Server transforms the incoming `clientOp` against these concurrent historical operations using `TextOperation.transform`. This yields `[transformedClientOp, ...transformedHistoricalOps]`. Only `transformedClientOp` is needed for application.
+    *   The `transformedClientOp` is applied to the server's `documentState`.
+    *   The document's `revision` is incremented.
+    *   The `transformedClientOp` is added to the document's `history`.
+    *   The updated document state is persisted to Redis.
+    *   A `ServerAckMsg` is sent back to the originating client with the new server `revision`.
+    *   A `ServerUpdateMsg` containing the `transformedClientOp` and its new `revision` is broadcast to *all other* clients in the document's room.
 5.  **Client Receives ACK:**
     *   State transitions from `awaitingPush`.
-    *   `syncedDoc` is updated by applying the original `outstandingOp`.
+    *   The client's `syncedDoc` is updated by applying the *original* `outstandingOp` (the one sent to the server).
     *   `outstandingOp` is cleared.
-    *   `serverRevision` is updated.
-    *   If `bufferedOp` is null (no edits during push), state becomes `synchronized`.
-    *   If `bufferedOp` exists, state becomes `dirty`.
+    *   `serverRevision` is updated to the value from the ACK message.
+    *   If `bufferedOp` is null (no edits during the push interval), state becomes `synchronized`. If `bufferedOp` exists, state becomes `dirty`.
 6.  **Other Client Receives Update:**
     *   Client receives `ServerUpdateMsg`.
-    *   The incoming server operation is transformed against the client's `outstandingOp` (if any).
-    *   The resulting operation is transformed against the client's `bufferedOp` (if any).
-    *   The final transformed operation is applied to the editor content (`setEditorValue`).
-    *   `syncedDoc` is updated by applying the operation transformed only against `outstandingOp`.
+    *   Client retrieves the incoming `serverOp`.
+    *   If the client has an `outstandingOp` (waiting for its own push ACK), the incoming `serverOp` is transformed against it: `[serverOpPrime, outstandingOpPrime] = TextOperation.transform(serverOp, outstandingOp)`. `outstandingOp` is updated to `outstandingOpPrime`.
+    *   The resulting operation (`serverOp` if no outstanding op, or `serverOpPrime`) is then transformed against the client's `bufferedOp` (if any): `[finalOpToApply, bufferedOpPrime] = TextOperation.transform(serverOpPrime/serverOp, bufferedOp)`. `bufferedOp` is updated to `bufferedOpPrime`.
+    *   The `syncedDoc` is updated by applying the server operation *transformed only against the outstandingOp* (if any).
+    *   The `finalOpToApply` is applied to the editor content. `setEditorValue` is used to perform this update programmatically while ignoring the resulting `change` event from Ace to prevent feedback loops.
+    *   The `virtualDoc` is updated to match the new editor content.
     *   `serverRevision` is updated.
-    *   State is re-evaluated (`synchronized` or `dirty`).
-7.  **Pull:** User clicks "Pull Changes".
+    *   State is re-evaluated (`synchronized`, `dirty`, or remains `awaitingPush`).
+7.  **Pull (less frequent in auto mode, used for recovery):** If the client detects a significant out-of-sync condition (e.g., receiving an update with a non-sequential revision number), it triggers a pull.
     *   State becomes `awaitingPull`.
-    *   `ClientPullMsg` is sent with the current `serverRevision`.
+    *   A `ClientPullMsg` is sent with the current `serverRevision`. The auto-push timer is temporarily stopped.
 8.  **Server Receives Pull:**
-    *   Server retrieves operations from `operationHistory` since the client's `revision`.
-    *   `ServerHistoryMsg` is sent back with the list of operations.
+    *   Server validates the `revision`.
+    *   Retrieves operations from the document's `history` since the client's `revision`.
+    *   Sends a `ServerHistoryMsg` with the list of historical operations and the current full document state and revision.
 9.  **Client Receives History:**
-    *   Client iterates through the received operations.
+    *   Client iterates through the received historical operations.
     *   Each operation is transformed against `outstandingOp` and `bufferedOp` (similar to handling `ServerUpdateMsg`).
-    *   Operations are applied sequentially to editor content and `syncedDoc`.
-    *   `serverRevision` is updated to the latest revision from the message.
-    *   State is re-evaluated.
+    *   The transformed operations are applied sequentially to the editor content and `syncedDoc`.
+    *   `serverRevision` and `localRevision` are updated to the latest revision from the message.
+    *   The editor content is explicitly set to the final state.
+    *   State is re-evaluated based on `outstandingOp` and editor content vs `syncedDoc`. The auto-push timer is restarted if in Automatic mode.
 
 ## Limitations & Future Work
 
-*   **Basic Error Handling:** Error conditions (e.g., transform failures, out-of-order messages) are logged but recovery might require a full page refresh or server restart in edge cases.
-*   **Scalability:** The current implementation is a prototype and hasn't been optimized for a large number of users or very large documents. Our OT implementation is relatively trivial and simplistic.
-*   **Potential Improvements:**
-    *   Implement more robust conflict resolution and error recovery strategies.
-    *   Explore optimizations for large documents or high-frequency edits.
-    *   Add a permission system / ownership of documents to prevent unauthorized access and edits.
-    *   Add real-time cursor position indicators to show who is typing.
+*   **Error Handling:** While basic error logging and some recovery (like forcing a pull on inconsistent state) are present, a production-ready system would require more robust error detection, retry mechanisms, and conflict resolution strategies.
+*   **Scalability:** The current in-memory document state on the server and the linear history approach for transforms have limitations for very large documents or extremely high user concurrency. A more scalable solution might involve sharding documents, using a persistent OT log, or exploring different OT implementations optimized for performance.
+*   **Real-time Cursors:** Showing where other users are typing requires tracking cursor positions and selections on the client and broadcasting these via separate messages, transforming them based on operations, and rendering them in the editor.
+*   **Undo/Redo:** Implementing robust collaborative undo/redo is complex in OT, requiring tracking inverse operations and coordinating their application across clients.
+*   **Rich Text/Other Data Types:** OT can be extended to handle other data types beyond plain text (e.g., formatting, embedded objects), but this significantly increases complexity.
+*   **Access Control:** No authentication or authorization currently exists; any client can modify any document given its ID.
