@@ -1,6 +1,12 @@
 # BLADE: Fast, Collaborative Markdown Editor with Math Typesetting (OT Prototype)
 
+**Live Demo: [Click Here!](https://www.michalkurek.com)**
+
 This project implements a basic real-time collaborative Markdown editor using Operational Transformation (OT). It features a client-server architecture where text changes are synchronized between multiple users via WebSockets. A central server maintains the authoritative document state and manages operation history. The editor also supports LaTeX-style math typesetting within the Markdown preview.
+
+![Dashboard IMG](./static/dashboard.jpeg)
+
+![Editor IMG](./static/editor.jpeg)
 
 ## Features
 
