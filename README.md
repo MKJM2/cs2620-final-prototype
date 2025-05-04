@@ -95,6 +95,7 @@ The client uses `transform` to integrate incoming `ServerUpdateMsg` operations w
 **Prerequisites:**
 
 *   Bun installed (`curl -fsSL https://bun.sh/install | bash`)
+*   Redis server installed and running (e.g. `brew install redis && brew services start redis`). Optionally set `REDIS_URL` (e.g. `export REDIS_URL="redis://localhost:6379"`).
 
 **Installation:**
 

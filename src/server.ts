@@ -22,6 +22,7 @@ import type {
 } from "./types";
 import { Socket } from "socket.io";
 import { randomUUID } from "crypto";
+import { redis } from "bun";
 
 // Get __dirname for ESM
 const __filename = fileURLToPath(import.meta.url);
@@ -97,6 +98,29 @@ We extend our heartfelt thanks to the entire teaching staff for an amazing semes
 `;
 documents.set(showcaseId, { content: showcaseContent, revision: 0, history: [] });
 
+// Load persisted documents from Redis
+;(async () => {
+  const keys = (await redis.send("KEYS", ["doc:*"])) as string[];
+  for (const key of keys) {
+    const dataStr = await redis.get(key);
+    if (!dataStr) continue;
+    const { content, revision, history: historyJson } = JSON.parse(dataStr) as {
+      content: string;
+      revision: number;
+      history: any[];
+    };
+    const historyOps = historyJson.map((op) => TextOperation.fromJSON(op));
+    const docId = key.replace(/^doc:/, "");
+    documents.set(docId, { content, revision, history: historyOps });
+  }
+  const defaultKey = `doc:${showcaseId}`;
+  const exists = await redis.exists(defaultKey);
+  if (!exists) {
+    await redis.set(defaultKey, JSON.stringify({ content: showcaseContent, revision: 0, history: [] }));
+  }
+  console.log(`Loaded ${documents.size} documents from Redis.`);
+})();
+
 // -- User Presence State ---
 const connectedUsers = new Map<string, UserInfo>();
 
@@ -136,6 +160,8 @@ app.get("/docs/:docId", (req, reply) => {
 app.post("/docs", async (req, reply) => {
   const docId = randomUUID();
   documents.set(docId, { content: "", revision: 0, history: [] });
+  // Persist new document to Redis
+  await redis.set(`doc:${docId}`, JSON.stringify({ content: "", revision: 0, history: [] }));
   reply.code(201).send({ id: docId });
 });
 
@@ -184,7 +210,7 @@ app.ready().then(() => {
     console.log(`Sent initial state (rev ${doc.revision}) to ${socket.id}`);
 
     // 4b. Handle client 'push' events.
-    socket.on("push", (msg: ClientPushMsg) => {
+    socket.on("push", async (msg: ClientPushMsg) => {
       console.log(
         `Received push from ${socket.id} based on their rev ${msg.revision}`
       );
@@ -249,6 +275,17 @@ app.ready().then(() => {
         console.log(
           `Broadcast update (rev ${doc.revision}) to other clients`
         );
+
+        // Persist updated document to Redis
+        try {
+          await redis.set(`doc:${docId}`, JSON.stringify({
+            content: doc.content,
+            revision: doc.revision,
+            history: doc.history.map((op) => op.toJSON()),
+          }));
+        } catch (err) {
+          console.error(`Failed to persist document ${docId} to Redis:`, err);
+        }
       } catch (error: any) {
         console.error(
           `Error processing push from ${socket.id}:`,
