@@ -22,9 +22,21 @@ This project implements a basic real-time collaborative Markdown editor using Op
 *   **TypeScript:** Entire codebase (client and server) written in TypeScript.
 *   **Testing:** Includes unit tests for the core OT logic using Vitest.
 
+## Distributed System Strategy
+
+To handle multiple documents and scale the server, we employ a distributed system strategy. The core idea is to ensure that for any given document, all connected clients communicate with a single server node that holds the authoritative "ground truth" state for that document. This prevents complex distributed state management logic for individual documents and simplifies the OT transformation process, as concurrent operations for a single document are always processed sequentially on the same node.
+
+This is achieved using an Nginx reverse proxy configured as a load balancer. Nginx sits in front of multiple backend application server nodes (running the `src/server.ts` Bun application). The Nginx configuration (which is redacted here for security reasons, but representative of our deployed setup) utilizes Lua scripting within the Nginx request handling.
+
+When a client initiates a WebSocket connection to a specific document ID (e.g., `/docs/some-doc-id`), the Nginx Lua script extracts the document ID from the request URL. It then uses this document ID as a key to consistently hash and direct the client's connection to a specific backend server node. This ensures that all clients connecting to the *same* document ID are routed to the *same* backend node.
+
+Nginx also performs health checks ("heartbeats") against the backend nodes. If a backend node is detected as unhealthy, Nginx will stop routing new connections to it. Existing connections on the unhealthy node will eventually drop, and clients will attempt to reconnect, being routed to an active node (potentially a different one for that document ID if the original node remains down).
+
+For persistent storage of document state and history, we utilize a Redis Cluster. Each document's data (content, revision, history) is stored under a key namespaced by its document ID (e.g., `doc:some-doc-id`). This allows the server nodes to load and save document state as needed, and the Redis Cluster handles data distribution and failover.
+
 ## Technology Stack
 
-*   **Backend:** Bun, TypeScript, Fastify, Socket.IO, Redis
+*   **Backend:** Bun, TypeScript, Fastify, Socket.IO, Redis, Nginx
 *   **Frontend:** TypeScript, Ace Editor, Alpine.js, Socket.IO Client, Marked.js, KaTeX
 *   **Testing:** Vitest
 *   **Build:** Bun, concurrently
